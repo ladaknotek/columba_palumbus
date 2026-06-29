@@ -1,0 +1,91 @@
+:root { --paper:#fffdf9; --ink:#26313b; --muted:#687280; --line:#dce3e8; --accent:#356d91; --accent-soft:#e7f1f6; --panel:#f5f7f8; }
+* { box-sizing:border-box; }
+body { margin:0; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color:var(--ink); background:#eaf0f3; }
+button, input, select { font:inherit; }
+button { cursor:pointer; }
+.app-shell { min-height:100vh; display:grid; grid-template-rows:auto 1fr; }
+.topbar { display:flex; align-items:center; gap:10px; padding:12px 18px; background:#fff; border-bottom:1px solid var(--line); position:sticky; top:0; z-index:10; }
+.brand { font-weight:760; letter-spacing:-.02em; margin-right:12px; }
+.brand span { color:var(--accent); }
+.title-input { width:220px; padding:8px 10px; border:1px solid transparent; background:#f7f8fa; border-radius:8px; font-weight:650; }
+.title-input:focus { outline:none; border-color:#8bb7d0; background:white; }
+.spacer { flex:1; }
+.btn { border:1px solid var(--line); border-radius:8px; padding:8px 10px; background:#fff; color:var(--ink); }
+.btn:hover { background:#f5f8f9; }
+.btn.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+.btn.active { background:var(--accent-soft); border-color:#a5c8db; color:#224f6b; }
+.status { color:var(--muted); font-size:12px; min-width:130px; text-align:right; }
+.workspace { display:grid; grid-template-columns:188px minmax(0, 1fr) 285px; min-height:0; }
+.sidebar, .inspector { background:#fff; border-right:1px solid var(--line); padding:16px; }
+.inspector { border-right:0; border-left:1px solid var(--line); }
+.section-title { margin:0 0 10px; font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:.07em; }
+.voice-list { display:grid; gap:6px; }
+.voice-button { text-align:left; display:flex; align-items:center; gap:8px; border:1px solid transparent; border-radius:9px; padding:9px; background:transparent; }
+.voice-button:hover { background:#f5f8f9; }
+.voice-button.active { border-color:#b7d3e3; background:#edf7fb; }
+.dot { width:10px; height:10px; border-radius:50%; }
+.main { min-width:0; padding:16px; display:flex; flex-direction:column; gap:12px; }
+.toolbar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; background:#fff; border:1px solid var(--line); padding:10px; border-radius:12px; }
+.toolbar-group { display:flex; gap:5px; padding-right:8px; border-right:1px solid var(--line); }
+.toolbar-group:last-child { border-right:0; }
+.duration { min-width:40px; font-size:18px; }
+.editor-card { border:1px solid var(--line); background:var(--paper); border-radius:14px; overflow:auto; box-shadow:0 8px 26px rgba(34,60,78,.08); }
+.notation-svg { width:100%; min-width:950px; display:block; }
+.staff-line,.bar-line { stroke:#61727d; stroke-width:1; }
+.bar-line { stroke:#9eadb6; }
+.staff-label { fill:#53636d; font-size:13px; text-anchor:end; font-weight:650; }
+.clef { font-size:44px; fill:#31404a; }
+.measure-number { font-size:10px; fill:#78858c; }
+.note { cursor:pointer; transition:filter .12s; }
+.note:hover { filter:brightness(.8); }
+.note.selected ellipse { stroke:#132f40; stroke-width:2; }
+.note.active ellipse { filter:drop-shadow(0 0 2px rgba(30,100,135,.35)); }
+.stem,.flag { stroke:#37434b; stroke-width:1.4; fill:none; }
+.lyric { font-size:13px; text-anchor:middle; fill:#2a3941; }
+.rest { font-size:21px; fill:#3d4c55; }
+.cursor { stroke:#d6445b; stroke-width:2; stroke-dasharray:4 3; }
+.input-dock { display:grid; grid-template-columns:1fr auto; gap:12px; align-items:center; background:#fff; border:1px solid var(--line); border-radius:12px; padding:12px; }
+.help { color:var(--muted); font-size:13px; }
+.griff { display:grid; gap:6px; justify-content:end; }
+.griff-row { display:flex; gap:5px; }
+.griff-key { min-width:32px; padding:6px 4px; border:1px solid #b7c9d3; border-radius:50%; background:#fbfdfe; text-align:center; font-size:11px; }
+.griff-key b { display:block; font-size:12px; }
+.field { display:grid; gap:5px; margin-bottom:14px; }
+.field label { color:var(--muted); font-size:12px; }
+.field input,.field select { width:100%; padding:8px; border:1px solid var(--line); border-radius:7px; background:#fff; }
+.event-info { border-top:1px solid var(--line); margin-top:12px; padding-top:12px; font-size:13px; color:var(--muted); }
+.project-list { margin-top:22px; border-top:1px solid var(--line); padding-top:14px; }
+.project-row { width:100%; border:0; text-align:left; padding:8px 5px; background:transparent; border-radius:6px; }
+.project-row:hover { background:#f3f7f9; }
+.project-row small { display:block; color:var(--muted); margin-top:2px; }
+.hidden { display:none; }
+@media (max-width: 1100px) { .workspace { grid-template-columns:170px minmax(0,1fr); } .inspector { display:none; } }
+@media (max-width: 760px) { .workspace { grid-template-columns:1fr; } .sidebar { display:none; } .topbar { flex-wrap:wrap; } .main { padding:10px; } .input-dock { grid-template-columns:1fr; } .griff { justify-content:start; } .status { text-align:left; } }
+
+/* A4 partitura: jednotlivé stránky, systémy spojené závorkou a společnými taktovými čarami. */
+.editor-card { position:relative; background:#d9e1e5; padding:34px 28px 30px; border-radius:14px; overflow:auto; min-height:calc(100vh - 265px); box-shadow:0 8px 26px rgba(34,60,78,.08); }
+.zoom-hint { position:sticky; top:0; z-index:2; width:max-content; margin:0 0 12px auto; padding:6px 9px; border:1px solid rgba(77,103,116,.23); border-radius:999px; background:rgba(255,255,255,.88); color:#566772; font-size:12px; box-shadow:0 2px 9px rgba(34,60,78,.09); }
+.paper-stack { display:grid; gap:34px; justify-content:center; min-width:0; zoom:var(--notation-zoom); transform-origin:top center; }
+.paper-page { width:min(100%, 980px); aspect-ratio:1123 / 1587; background:var(--paper); box-shadow:0 5px 20px rgba(27,45,55,.20); }
+.notation-page-svg { display:block; width:100%; height:100%; }
+.page-bg { fill:#fffdf9; }
+.score-title { font:700 30px Georgia, 'Times New Roman', serif; fill:#202a31; text-anchor:middle; }
+.score-composer { font:italic 15px Georgia, 'Times New Roman', serif; fill:#4d5961; text-anchor:end; }
+.score-meta { font:13px Inter, sans-serif; fill:#66737b; }
+.page-number { font:13px Inter, sans-serif; fill:#7a858b; text-anchor:middle; }
+.staff-line,.bar-line,.end-bar-line,.system-bar { stroke:#34434c; stroke-width:1; }
+.end-bar-line { stroke-width:2.2; }
+.system-bar { stroke-width:1.5; }
+.brace { stroke:#34434c; stroke-width:1.7; fill:none; }
+.staff-label { fill:#53636d; font-size:13px; text-anchor:end; font-weight:650; }
+.clef { font-size:44px; fill:#31404a; }
+.measure-number { font-size:10px; fill:#78858c; }
+.note { cursor:pointer; transition:filter .12s; }
+.note:hover { filter:brightness(.8); }
+.note.selected ellipse { stroke:#132f40; stroke-width:2; }
+.note.active ellipse { filter:drop-shadow(0 0 2px rgba(30,100,135,.35)); }
+.stem,.flag { stroke:#37434b; stroke-width:1.4; fill:none; }
+.lyric { font-size:13px; text-anchor:middle; fill:#2a3941; }
+.rest { font-size:21px; fill:#3d4c55; }
+.cursor { stroke:#d6445b; stroke-width:2; stroke-dasharray:4 3; }
+@media (max-width: 900px) { .editor-card { padding:16px; min-height:55vh; } .paper-page { width:760px; } .zoom-hint { position:static; margin-left:auto; } }
