@@ -1,113 +1,112 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { voiceOrder, type NoteLength, type VoiceId } from '../domain/music';
-import { AccordionKeyboard } from '../features/editor/AccordionKeyboard';
-import { ScorePreview } from '../features/editor/ScorePreview';
-import { useScoreStore } from '../features/editor/scoreStore';
-import { AudioEngine } from '../features/playback/audioEngine';
-import { defaultBGriffProfile } from '../features/settings/accordionMapping';
+import { createEmptyProject, defaultMidiForVoice, type Duration, type NoteEvent, type ScoreProject, type VoiceId } from '../domain/score';
+import { EditorControls } from '../features/editor/EditorControls';
+import { ScoreRenderer } from '../features/editor/ScoreRenderer';
+import { downloadProject, loadProject, readProjectFile, saveProject } from '../features/projects/projectStorage';
+import { PlaybackEngine } from '../features/playback/playbackEngine';
 
-const plainKeyboardMap: Record<string, number> = { c: 60, d: 62, e: 64, f: 65, g: 67, a: 69, h: 71 };
-const lengths: { id: NoteLength; label: string; symbol: string }[] = [
-  { id: 'whole', label: 'Celá', symbol: '𝅝' },
-  { id: 'half', label: 'Půlová', symbol: '𝅗𝅥' },
-  { id: 'quarter', label: 'Čtvrťová', symbol: '♩' },
-  { id: 'eighth', label: 'Osminová', symbol: '♪' },
-  { id: 'sixteenth', label: 'Šestnáctinová', symbol: '𝅘𝅥𝅯' },
-];
+const SLOT_COUNT = 4;
 
 export function App() {
-  const { state, dispatch } = useScoreStore();
-  const audio = useMemo(() => new AudioEngine(), []);
-  const [playingVoice, setPlayingVoice] = useState<VoiceId | null>(null);
-  const [inputMode, setInputMode] = useState<'letters' | 'accordion'>('letters');
-  const held = useRef(new Set<string>());
+  const [project, setProject] = useState<ScoreProject>(() => loadProject() ?? createEmptyProject());
+  const [activeVoice, setActiveVoice] = useState<VoiceId>('s');
+  const [duration, setDuration] = useState<Duration>('quarter');
+  const [cursor, setCursor] = useState({ measure: 0, slot: 0 });
+  const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
+  const [playingEventId, setPlayingEventId] = useState<string | null>(null);
+  const [status, setStatus] = useState('Připraveno');
+  const [zoom, setZoom] = useState(1);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const playbackRef = useRef(new PlaybackEngine());
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      saveProject(project);
+      setStatus('Uloženo lokálně');
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [project]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.ctrlKey || event.metaKey || event.altKey || event.repeat) return;
-      const tag = (event.target as HTMLElement | null)?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
-      const key = event.key.toLowerCase();
-      if (key === 'backspace') { event.preventDefault(); dispatch({ type: 'deleteLast' }); return; }
-      const midi = inputMode === 'letters' ? plainKeyboardMap[key] : defaultBGriffProfile.keyboardToMidi[key];
-      if (midi === undefined || held.current.has(key)) return;
-      held.current.add(key);
-      dispatch({ type: 'appendNote', midi });
-      audio.playTone(midi);
+      if ((event.target as HTMLElement)?.matches('input, textarea')) return;
+      const noteMap: Record<string, number> = { c: 60, d: 62, e: 64, f: 65, g: 67, a: 69, h: 71 };
+      const midi = noteMap[event.key.toLowerCase()];
+      if (midi !== undefined) { event.preventDefault(); insertNote(midi); }
+      if (event.key === 'Backspace') { event.preventDefault(); deleteSelectedOrLast(); }
     };
-    const onKeyUp = (event: KeyboardEvent) => held.current.delete(event.key.toLowerCase());
     window.addEventListener('keydown', onKeyDown);
-    window.addEventListener('keyup', onKeyUp);
-    return () => {
-      window.removeEventListener('keydown', onKeyDown);
-      window.removeEventListener('keyup', onKeyUp);
-      audio.stop();
-    };
-  }, [audio, dispatch, inputMode]);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  });
 
-  const addNote = (midi: number) => { dispatch({ type: 'appendNote', midi }); audio.playTone(midi); };
+  function updateProject(mutator: (current: ScoreProject) => ScoreProject) {
+    setProject((current) => ({ ...mutator(current), updatedAt: new Date().toISOString() }));
+  }
 
-  return (
-    <main className="app-shell">
-      <header className="topbar">
-        <div>
-          <p className="eyebrow">Quartet Workspace · v0.1</p>
-          <h1>Pracovní prostor pro vokální aranže</h1>
+  function insertNote(midi: number) {
+    const id = crypto.randomUUID();
+    const event: NoteEvent = { id, voiceId: activeVoice, measure: cursor.measure, slot: cursor.slot, midi, duration };
+    updateProject((current) => ({ ...current, events: [...current.events.filter((existing) => !(existing.voiceId === activeVoice && existing.measure === cursor.measure && existing.slot === cursor.slot)), event] }));
+    setSelectedEventId(id);
+    advanceCursor();
+  }
+
+  function advanceCursor() {
+    setCursor((current) => {
+      const nextSlot = current.slot + 1;
+      if (nextSlot < SLOT_COUNT) return { ...current, slot: nextSlot };
+      const nextMeasure = current.measure + 1;
+      if (nextMeasure >= project.measureCount) updateProject((score) => ({ ...score, measureCount: score.measureCount + 4 }));
+      return { measure: nextMeasure, slot: 0 };
+    });
+  }
+
+  function deleteSelectedOrLast() {
+    const target = selectedEventId ?? [...project.events].filter((item) => item.voiceId === activeVoice).at(-1)?.id;
+    if (!target) return;
+    updateProject((current) => ({ ...current, events: current.events.filter((event) => event.id !== target) }));
+    setSelectedEventId(null);
+  }
+
+  const selectedEvent = useMemo(() => project.events.find((event) => event.id === selectedEventId) ?? null, [project.events, selectedEventId]);
+
+  function changeLyric(value: string) {
+    if (!selectedEventId) return;
+    updateProject((current) => ({ ...current, events: current.events.map((event) => event.id === selectedEventId ? { ...event, lyric: value || undefined } : event) }));
+  }
+
+  function changeTitle(value: string) { updateProject((current) => ({ ...current, title: value })); }
+  function resetProject() { if (confirm('Opravdu vytvořit nový projekt?')) { playbackRef.current.stop(); setProject(createEmptyProject()); setCursor({ measure: 0, slot: 0 }); setSelectedEventId(null); } }
+  function importProject(file: File) { readProjectFile(file).then((loaded) => { setProject(loaded); setStatus('Projekt otevřen'); }).catch((error: Error) => alert(error.message)); }
+  function play() { playbackRef.current.play(project, setPlayingEventId); }
+  function stop() { playbackRef.current.stop(); setPlayingEventId(null); }
+
+  return <div className="app-shell">
+    <header className="app-header">
+      <div className="brand">Quartet Workspace</div>
+      <button type="button" onClick={resetProject}>Nový</button>
+      <button type="button" className="primary" onClick={() => { saveProject(project); setStatus('Uloženo'); }}>Uložit</button>
+      <button type="button" onClick={() => downloadProject(project)}>Export</button>
+      <button type="button" onClick={() => fileInputRef.current?.click()}>Otevřít</button>
+      <input ref={fileInputRef} hidden type="file" accept="application/json,.json,.quartet.json" onChange={(event) => { const file = event.target.files?.[0]; if (file) importProject(file); event.currentTarget.value = ''; }} />
+      <span className="header-spacer" />
+      <button type="button" className="play-button" onClick={play}>▶ Přehrát</button>
+      <button type="button" onClick={stop}>■ Stop</button>
+      <span className="status">{status}</span>
+    </header>
+    <div className="workspace">
+      <EditorControls activeVoice={activeVoice} duration={duration} layoutMode={project.layoutMode} onVoiceChange={setActiveVoice} onDurationChange={setDuration} onLayoutChange={(layoutMode) => updateProject((current) => ({ ...current, layoutMode }))} onInsertNote={insertNote} />
+      <main className="editor-main">
+        <div className="editor-toolbar title-row"><label>Název <input value={project.title} onChange={(event) => changeTitle(event.target.value)} /></label><label>Tempo <input className="tempo-input" type="number" min="30" max="300" value={project.tempo} onChange={(event) => updateProject((current) => ({ ...current, tempo: Math.max(30, Math.min(300, Number(event.target.value) || 96)) }))} /></label><span>Kurzor: takt {cursor.measure + 1}, pozice {cursor.slot + 1}</span></div>
+        <div className="editor-scroll" onWheel={(event) => { if (!event.ctrlKey) return; event.preventDefault(); setZoom((current) => Math.max(0.55, Math.min(1.85, current + (event.deltaY < 0 ? 0.1 : -0.1)))); }}>
+          <div className="zoom-hint">Ctrl + kolečko: {Math.round(zoom * 100)} %</div>
+          <div className="zoom-stage" style={{ transform: `scale(${zoom})` }}><ScoreRenderer project={project} activeVoice={activeVoice} selectedEventId={selectedEventId} playingEventId={playingEventId} onSelectEvent={(event) => { setSelectedEventId(event.id); setActiveVoice(event.voiceId); }} /></div>
         </div>
-        <div className="top-actions">
-          <button className="secondary" onClick={() => dispatch({ type: 'reset' })}>Nová skladba</button>
-          <button className="primary" onClick={() => audio.playScore(state.score, setPlayingVoice)}>▶ Přehrát</button>
-          <button className="secondary" onClick={() => { audio.stop(); setPlayingVoice(null); }}>■ Stop</button>
-        </div>
-      </header>
-
-      <section className="toolbar">
-        <label>Tempo <input type="number" min="30" max="240" value={state.score.tempo} onChange={(e) => dispatch({ type: 'setTempo', tempo: Number(e.target.value) || 92 })} /> BPM</label>
-        <div className="toggle-group">
-          <button className={state.layout === 'four-staves' ? 'selected' : ''} onClick={() => dispatch({ type: 'setLayout', layout: 'four-staves' })}>4 osnovy</button>
-          <button className={state.layout === 'choir-two-staves' ? 'selected' : ''} onClick={() => dispatch({ type: 'setLayout', layout: 'choir-two-staves' })}>Sbor 2+2</button>
-        </div>
-        <div className="toggle-group">
-          <button className={inputMode === 'letters' ? 'selected' : ''} onClick={() => setInputMode('letters')}>C–H klávesy</button>
-          <button className={inputMode === 'accordion' ? 'selected' : ''} onClick={() => setInputMode('accordion')}>B-griff klávesy</button>
-        </div>
-      </section>
-
-      <div className="workspace-grid">
-        <aside className="sidebar">
-          <section>
-            <h2>Aktivní hlas</h2>
-            <div className="voice-list">
-              {voiceOrder.map((voiceId) => {
-                const voice = state.score.voices[voiceId];
-                return <div className="voice-item" key={voiceId}>
-                  <button className={state.activeVoice === voiceId ? 'voice selected' : 'voice'} onClick={() => dispatch({ type: 'selectVoice', voiceId })}>{voice.label}</button>
-                  <button className="mute" aria-label={`Ztlumit ${voice.label}`} onClick={() => dispatch({ type: 'toggleMute', voiceId })}>{voice.muted ? '🔇' : '🔊'}</button>
-                </div>;
-              })}
-            </div>
-          </section>
-          <section>
-            <h2>Délka noty</h2>
-            <div className="length-list">
-              {lengths.map((length) => <button key={length.id} className={state.selectedLength === length.id ? 'length selected' : 'length'} onClick={() => dispatch({ type: 'selectLength', length: length.id })}><span>{length.symbol}</span>{length.label}</button>)}
-            </div>
-          </section>
-          <section className="help">
-            <h2>Ovládání</h2>
-            <p><kbd>Backspace</kbd> smaže poslední notu aktivního hlasu.</p>
-            <p>Režim C–H: <kbd>C</kbd> až <kbd>H</kbd>.</p>
-            <p>Režim B-griff: Q–I, A–K a Z–M dle uloženého profilu.</p>
-          </section>
-        </aside>
-
-        <section className="editor-area">
-          <ScorePreview score={state.score} layout={state.layout} activeVoice={state.activeVoice} playingVoice={playingVoice} />
-          <AccordionKeyboard onNote={addNote} />
-        </section>
-      </div>
-
-      <footer>Architektura v0.1: doménový model not → editorový stav → vstupy → audio → budoucí renderer/export. Nejprve stabilní jádro, potom VexFlow/MusicXML.</footer>
-    </main>
-  );
+      </main>
+      <aside className="right-panel">
+        <div className="panel-heading">Vybraná nota</div>
+        {selectedEvent ? <><p><strong>{selectedEvent.voiceId.toUpperCase()}</strong> · MIDI {selectedEvent.midi}<br />takt {selectedEvent.measure + 1}</p><label>Text / slabika<textarea value={selectedEvent.lyric ?? ''} onChange={(event) => changeLyric(event.target.value)} placeholder="např. A-" /></label><button type="button" onClick={() => { updateProject((current) => ({ ...current, events: current.events.map((event) => event.id === selectedEvent.id ? { ...event, midi: defaultMidiForVoice(event.voiceId) } : event) })); }}>Vrátit výšku hlasu</button></> : <p className="muted">Vyber notu v partituře. Pak jí můžeš přiřadit slabiku textu.</p>}
+      </aside>
+    </div>
+  </div>;
 }

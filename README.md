@@ -1,8 +1,34 @@
-# Quartet Workspace v0.6
+# Quartet Workspace — React foundation
 
-Otevři `index.html` v Chrome/Edge. Není potřeba Node.js ani instalace.
+Tato verze je záměrný přechod ze statického `index.html` na jedinou React/Vite aplikaci.
 
-## Oprava zoomu
-Ctrl + kolečko je zachyceno na úrovni dokumentu (`capture: true`, `passive: false`) a prohlížečové přiblížení se zablokuje pouze tehdy, když je ukazatel nad editorem partitury.
+## Spuštění
 
-Obsahuje lokální ukládání, export/import projektu, 2/4 osnovy, automatické přidávání dalších systémů po dojetí kurzorem a základní text pod notami.
+```powershell
+npm.cmd install --registry=https://registry.npmjs.org/
+npm.cmd run dev
+```
+
+## Co zůstává funkční
+
+- SATB hlasy a 2/4 osnovy;
+- pět linek v každé osnově;
+- lokální autosave, nový projekt, export/import `.quartet.json`;
+- zápis přes C D E F G A H, klikací B-griff vstup;
+- text připojený k vybrané notě;
+- přehrávání a stop;
+- Ctrl + kolečko nad editorem pro zoom;
+- automatické přidání dalších čtyř taktů při zápisu na konci.
+
+## Důležité soubory
+
+- `src/main.tsx` — jediný vstup do Reactu.
+- `src/app/App.tsx` — sestavení aplikace a její stav.
+- `src/domain/score.ts` — datový model skladby.
+- `src/features/editor/ScoreRenderer.tsx` — kreslení papíru, systémů, osnov a not.
+- `src/features/playback/playbackEngine.ts` — přehrávání přes Web Audio API.
+- `src/features/projects/projectStorage.ts` — localStorage a import/export souborů.
+
+## Záměr refaktoru
+
+`index.html` obsahuje jen `#root` a načtení `src/main.tsx`. Nesmí v něm zůstat žádný editorový HTML, CSS ani JavaScript. Tím se nebude míchat stará statická aplikace s Reactovou.

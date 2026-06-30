@@ -1,132 +1,14 @@
 <!doctype html>
 <html lang="cs">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Quartet Workspace v0.9</title>
-<style>
-:root{--ink:#202833;--muted:#647184;--line:#d9e0e8;--panel:#f4f7fa;--accent:#2d6cdf;--paper:#fff;}
-*{box-sizing:border-box} body{margin:0;background:#e9eef3;color:var(--ink);font:14px/1.35 system-ui,-apple-system,"Segoe UI",sans-serif}
-header{height:58px;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:12px;padding:0 18px;position:sticky;top:0;z-index:10}.brand{font-weight:800;font-size:17px;margin-right:10px}.spacer{flex:1}button,select,input{font:inherit}button{border:1px solid #cfd7e2;background:#fff;border-radius:7px;padding:7px 10px;cursor:pointer}button:hover{background:#f6f9ff}button.primary{background:var(--accent);border-color:var(--accent);color:#fff}.status{color:var(--muted);font-size:12px}
-.layout{display:grid;grid-template-columns:190px minmax(0,1fr) 250px;min-height:calc(100vh - 58px)}aside{background:#fff;border-right:1px solid var(--line);padding:14px}.right{border-left:1px solid var(--line);border-right:0}.section-title{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:12px 0 8px}.voice{width:100%;text-align:left;margin:3px 0;display:flex;align-items:center;gap:8px}.voice.active{background:#eef4ff;border-color:#9db9ef}.dot{width:10px;height:10px;border-radius:50%;background:#7c8da0}.voice[data-v="s"] .dot{background:#d55}.voice[data-v="a"] .dot{background:#d99032}.voice[data-v="t"] .dot{background:#4e9b6a}.voice[data-v="b"] .dot{background:#5d74c7}
-main{min-width:0;display:flex;flex-direction:column}.toolbar{padding:10px 15px;background:#fff;border-bottom:1px solid var(--line);display:flex;gap:8px;align-items:center;flex-wrap:wrap}.tool-label{color:var(--muted);font-size:12px}.segment{display:flex;border:1px solid #cfd7e2;border-radius:7px;overflow:hidden}.segment button{border:0;border-radius:0}.segment button.active{background:#eaf1ff;color:#214eaa;font-weight:700}.editor-shell{flex:1;min-height:0;overflow:auto;padding:30px;position:relative}.zoom-hint{position:sticky;top:0;z-index:3;margin:0 auto 12px;max-width:794px;color:#617087;background:#f7fbffcc;border:1px solid #d8e9ff;border-radius:999px;padding:5px 10px;width:max-content;font-size:12px;backdrop-filter:blur(6px)}#zoomStage{transform-origin:top center;transition:transform .08s ease;width:794px;margin:0 auto}.page{width:794px;min-height:1123px;background:var(--paper);box-shadow:0 4px 18px #5060702e;padding:48px 54px 56px;margin:0 auto 28px}.page-title{font-family:Georgia,serif;font-size:28px;text-align:center;margin:0 0 6px}.meta{text-align:center;color:var(--muted);margin-bottom:28px}.score{display:flex;flex-direction:column;gap:32px}.system{position:relative;width:686px;min-height:156px}.brace{position:absolute;left:0;top:29px;width:18px;height:102px;border-left:3px solid #1b1b1b;border-top:3px solid #1b1b1b;border-bottom:3px solid #1b1b1b;border-radius:10px 0 0 10px}.connector{position:absolute;left:18px;top:28px;height:103px;border-left:1.5px solid #111}.staff-row{position:relative;height:54px;margin-left:27px}.staff-row + .staff-row{margin-top:22px}.staff-lines{position:absolute;left:0;right:0;top:8px;height:33px;background:repeating-linear-gradient(to bottom,#202020 0,#202020 1.4px,transparent 1.4px,transparent 8px)}.clef{position:absolute;top:-4px;left:5px;font-family:Georgia,serif;font-size:55px;line-height:1}.bass{font-size:48px;top:3px}.measure{position:absolute;top:0;width:145px;height:54px;border-right:1px solid #151515}.measure:first-of-type{border-left:1px solid #151515}.bar-number{position:absolute;top:-17px;left:4px;font-size:10px;color:#7a8594}.note{position:absolute;width:18px;height:18px;transform:translate(-50%,-50%);cursor:pointer}.head{position:absolute;width:11px;height:8px;background:#171717;border-radius:50%;transform:rotate(-20deg);left:2px;top:5px}.stem{position:absolute;width:1.6px;height:31px;background:#171717;left:12px;top:-20px}.down .stem{left:2px;top:8px}.note.active .head{background:#2d6cdf;outline:4px solid #bcd2ff;border-radius:50%}.lyric{position:absolute;top:34px;left:50%;transform:translateX(-50%);white-space:nowrap;font-family:Georgia,serif;font-size:15px}.voice-label{position:absolute;left:-52px;top:1px;font-size:11px;color:#687688}.right input,.right textarea{width:100%;border:1px solid #cfd7e2;border-radius:7px;padding:8px;background:#fff}.right textarea{resize:vertical;min-height:78px}.row{display:flex;gap:8px;align-items:center}.row>*{min-width:0}.kbd{display:grid;grid-template-columns:repeat(7,1fr);gap:5px;margin-top:8px}.key{background:#f4f7fb;border:1px solid #d7dfeb;border-radius:6px;text-align:center;padding:7px 2px;font-size:12px}.small{font-size:12px;color:var(--muted)}
-@media(max-width:900px){.layout{grid-template-columns:150px minmax(0,1fr)}.right{display:none}.editor-shell{padding:16px}.page{transform-origin:top left}}
-</style>
-</head>
-<body>
-<header><div class="brand">Quartet Workspace</div><button id="newBtn">Nový</button><button id="saveBtn" class="primary">Uložit</button><button id="exportBtn">Export</button><button id="importBtn">Otevřít</button><input id="fileInput" type="file" accept="application/json" hidden><span class="spacer"></span><span id="saveState" class="status">Připraveno</span></header>
-<div class="layout">
-<aside>
-  <div class="section-title">Hlasy</div>
-  <button class="voice active" data-v="s"><span class="dot"></span>Soprán</button>
-  <button class="voice" data-v="a"><span class="dot"></span>Alt</button>
-  <button class="voice" data-v="t"><span class="dot"></span>Tenor</button>
-  <button class="voice" data-v="b"><span class="dot"></span>Bas</button>
-  <div class="section-title">Vstup</div>
-  <div class="small">C D E F G A H zapisují tóny. Mezerník vloží pomlku.</div>
-  <div class="section-title">Délka</div>
-  <div class="segment" id="duration"><button data-d="4" class="active">♩</button><button data-d="2">𝅗𝅥</button><button data-d="1">𝅝</button><button data-d="8">♪</button></div>
-</aside>
-<main>
-  <div class="toolbar"><span class="tool-label">Zobrazení</span><div class="segment" id="layoutSwitch"><button data-layout="2" class="active">2 osnovy</button><button data-layout="4">4 osnovy</button></div><span class="tool-label">Tiskový pohled</span><select id="printView"><option value="score">Partitura</option><option value="s">Soprán</option><option value="a">Alt</option><option value="t">Tenor</option><option value="b">Bas</option></select><span class="tool-label">Zoom</span><button id="zoomOut">−</button><span id="zoomValue" class="small">100 %</span><button id="zoomIn">+</button><span class="small">Ctrl + kolečko nad partiturou</span></div>
-  <div class="editor-shell" id="editorShell"><div class="zoom-hint">Ctrl + kolečko nad partiturou přibližuje jen notový zápis</div><div id="zoomStage"></div></div>
-</main>
-<aside class="right"><div class="section-title">Vybraná nota</div><div id="selectedInfo" class="small">Zatím není vybraná nota.</div><div class="section-title">Text / slabika</div><textarea id="lyricInput" placeholder="Např. A- nebo ve"></textarea><button id="applyLyric" style="margin-top:8px">Přiřadit text</button><div class="section-title">B-griff vstup</div><div class="small">Základní ukázkové rozložení — bude později přesně konfigurovatelné.</div><div class="kbd" id="griff"></div></aside>
-</div>
-<script>
-(()=>{
-const LS='quartet-workspace-v09';
-const voices=['s','a','t','b']; const names={s:'Soprán',a:'Alt',t:'Tenor',b:'Bas'};
-const pitchMap={c:60,d:62,e:64,f:65,g:67,a:69,h:71};
-const griffMap={q:60,w:62,e:64,r:65,t:67,y:69,u:71,i:72,o:74,p:76,a:61,s:63,d:65,f:66,g:68,h:70,j:72,k:73,l:75};
-let state=load()||{title:'Nová skladba',layout:2,printView:'score',zoom:1,activeVoice:'s',duration:4,cursor:{measure:0,slot:0},measures:4,events:{s:[],a:[],t:[],b:[]},selected:null}; state.printView??='score';
-function load(){try{return JSON.parse(localStorage.getItem(LS))}catch{return null}}
-function save(msg='Uloženo lokálně'){localStorage.setItem(LS,JSON.stringify(state));document.getElementById('saveState').textContent=msg+' • '+new Date().toLocaleTimeString('cs-CZ',{hour:'2-digit',minute:'2-digit'});}
-function getNextCursorForVoice(v){ const events=state.events[v]||[]; if(!events.length)return {measure:0,slot:0}; const last=[...events].sort((a,b)=>a.measure-b.measure||a.slot-b.slot).at(-1); const next={measure:last.measure,slot:last.slot+1}; if(next.slot>=4){next.slot=0;next.measure++;} return next;}
-function setActiveVoice(v){state.activeVoice=v;state.cursor=getNextCursorForVoice(v); render();}
-function ensureMeasuresForCursor(){while(state.cursor.measure>=state.measures)state.measures+=4;}
-function posToStaffY(p,voice){
- // Čtyři pixely na diatonický krok by vyžadovaly převod MIDI→stupeň; pro první verzi je
- // posun laděný tak, aby hlavy seděly na linkách/mezerách a nebyly o linku výš.
- const base=(voice==='b'||voice==='t')?60:48;
- return base-(p-60)*2.1;
-}
-function groupRows(){
- const pv=state.printView||'score';
- if(pv!=='score') return [[pv]];
- return state.layout===2?[['s','a'],['t','b']]:[['s'],['a'],['t'],['b']];
-}
-function staffClef(row,rowIndex,rowCount){
- // Basový klíč je pouze na skutečně nejspodnější osnově systému.
- const pv=state.printView||'score';
- if(pv==='b')return '𝄢';
- return rowIndex===rowCount-1 && row.includes('b') ? '𝄢' : '𝄞';
-}
-function render(){
- document.getElementById('zoomStage').style.transform=`scale(${state.zoom})`;
- document.getElementById('zoomStage').style.marginBottom=`${(state.zoom-1)*1123}px`;
- document.getElementById('zoomValue').textContent=Math.round(state.zoom*100)+' %';
- document.querySelectorAll('#layoutSwitch button').forEach(b=>b.classList.toggle('active',+b.dataset.layout===state.layout));
- document.querySelectorAll('.voice').forEach(b=>b.classList.toggle('active',b.dataset.v===state.activeVoice));
- document.querySelectorAll('#duration button').forEach(b=>b.classList.toggle('active',+b.dataset.d===state.duration));
- document.getElementById('printView').value=state.printView||'score';
- const stage=document.getElementById('zoomStage'); stage.innerHTML='';
- const perSystem=4; const rows=groupRows();
- const systemsPerPage=rows.length===1?8:(rows.length===2?5:3);
- const systemStarts=[]; for(let s=0;s<state.measures;s+=perSystem) systemStarts.push(s);
- for(let pageStart=0;pageStart<systemStarts.length;pageStart+=systemsPerPage){
-   const page=document.createElement('section'); page.className='page';
-   const pageNo=Math.floor(pageStart/systemsPerPage)+1;
-   page.innerHTML=`<h1 class="page-title">${escapeHtml(state.title)}</h1><div class="meta">${state.printView&&state.printView!=='score'?names[state.printView]+' • ':''}SATB • 4/4 • 96 BPM${pageNo>1?' • strana '+pageNo:''}</div>`;
-   const score=document.createElement('div');score.className='score';
-   systemStarts.slice(pageStart,pageStart+systemsPerPage).forEach(start=>{
-     const count=Math.min(perSystem,state.measures-start);
-     const sys=document.createElement('div');sys.className='system';
-     sys.style.minHeight=(rows.length===1?'86px':rows.length===2?'156px':'310px');
-     if(rows.length===2)sys.insertAdjacentHTML('beforeend','<div class="brace"></div><div class="connector"></div>');
-     rows.forEach((row,rowIndex)=>{
-       const staff=document.createElement('div');staff.className='staff-row';
-       const clef=staffClef(row,rowIndex,rows.length);
-       staff.innerHTML=`<div class="staff-lines"></div><div class="clef ${clef==='𝄢'?'bass':''}">${clef}</div>`;
-       // Kliknutím do aktivní osnovy se přesune kurzor na nejbližší rytmickou pozici.
-       if(row.includes(state.activeVoice)){ staff.addEventListener('click',ev=>{ if(ev.target.closest('.note')) return; const rect=staff.getBoundingClientRect(); const x=(ev.clientX-rect.left)/state.zoom; const relative=x-42; if(relative<0)return; const localMeasure=Math.max(0,Math.min(count-1,Math.floor(relative/145))); const within=relative-localMeasure*145; const slot=Math.max(0,Math.min(3,Math.round((within-22)/28))); state.cursor={measure:start+localMeasure,slot}; ensureMeasuresForCursor(); save('Kurzor přesunut'); render(); }); }
-       for(let mi=0;mi<count;mi++){
-         const m=start+mi;const meas=document.createElement('div');meas.className='measure';meas.style.left=(42+mi*145)+'px';meas.innerHTML=`<span class="bar-number">${m+1}</span>`;staff.appendChild(meas);
-         row.forEach(v=>{state.events[v].filter(e=>e.measure===m).forEach(e=>{
-           if(e.rest)return;
-           const note=document.createElement('div');note.className='note '+((v==='a'||v==='b')?'down':'')+(state.selected===e.id?' active':'');
-           note.style.left=(42+mi*145+22+e.slot*28)+'px';note.style.top=posToStaffY(e.pitch,v)+'px';note.dataset.id=e.id;
-           note.innerHTML='<span class="head"></span><span class="stem"></span>'+(e.lyric?`<span class="lyric">${escapeHtml(e.lyric)}</span>`:'');
-           note.addEventListener('click',()=>{state.selected=e.id;document.getElementById('selectedInfo').textContent=`${names[v]} • MIDI ${e.pitch} • takt ${e.measure+1}`;document.getElementById('lyricInput').value=e.lyric||'';render();});staff.appendChild(note);
-         });});
-       }
-       if(state.cursor.measure>=start&&state.cursor.measure<start+count && rows.flat().includes(state.activeVoice)){
-          const cursor=document.createElement('div');cursor.style.cssText=`position:absolute;left:${42+(state.cursor.measure-start)*145+22+state.cursor.slot*28}px;top:8px;height:33px;border-left:2px solid #2d6cdf;`;staff.appendChild(cursor);
-       }
-       sys.appendChild(staff);
-     });score.appendChild(sys);
-   });
-   page.appendChild(score); stage.appendChild(page);
- }
-}
-const AudioEngine={ctx:null, play(midi){
- try{const C=window.AudioContext||window.webkitAudioContext;this.ctx??=new C(); if(this.ctx.state==='suspended') this.ctx.resume(); const now=this.ctx.currentTime;const o=this.ctx.createOscillator(),g=this.ctx.createGain();o.type='triangle';o.frequency.value=440*Math.pow(2,(midi-69)/12);g.gain.setValueAtTime(.0001,now);g.gain.exponentialRampToValueAtTime(.16,now+.012);g.gain.exponentialRampToValueAtTime(.0001,now+.42);o.connect(g).connect(this.ctx.destination);o.start(now);o.stop(now+.45)}catch(err){console.warn('Zvuk se nepodařilo spustit',err)}
-}};
-function escapeHtml(s){return s.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
-function addNote(pitch,rest=false){const e={id:crypto.randomUUID(),measure:state.cursor.measure,slot:state.cursor.slot,pitch,rest,duration:state.duration,lyric:''};const same=state.events[state.activeVoice].findIndex(x=>x.measure===e.measure&&x.slot===e.slot);if(same>=0)state.events[state.activeVoice].splice(same,1);state.events[state.activeVoice].push(e);state.selected=e.id;if(!rest)AudioEngine.play(pitch);advance();save();render();}
-function advance(){state.cursor.slot++; if(state.cursor.slot>=4){state.cursor.slot=0;state.cursor.measure++;}ensureMeasuresForCursor();}
-function zoom(delta){state.zoom=Math.max(.65,Math.min(1.8,Math.round((state.zoom+delta)*100)/100));save('Zoom upraven');render();}
-// Important: capture listener at document level, passive:false. Browser zoom is stopped only when pointer is inside the score editor.
-document.addEventListener('wheel',e=>{if(!e.ctrlKey)return; const inEditor=e.target.closest&&e.target.closest('#editorShell'); if(!inEditor)return; e.preventDefault(); zoom(e.deltaY<0?.08:-.08);},{passive:false,capture:true});
-document.addEventListener('keydown',e=>{const tag=document.activeElement.tagName;if(tag==='TEXTAREA'||tag==='INPUT')return;const key=e.key.toLowerCase();if(pitchMap[key]!==undefined){e.preventDefault();addNote(pitchMap[key]);}else if(griffMap[key]!==undefined){e.preventDefault();addNote(griffMap[key]);}else if(e.code==='Space'){e.preventDefault();addNote(60,true)}else if(e.key==='Backspace'){e.preventDefault();const arr=state.events[state.activeVoice];if(arr.length)arr.pop();save();render();}});
-document.getElementById('printView').onchange=e=>{state.printView=e.target.value;save('Pohled upraven');render()};document.querySelectorAll('.voice').forEach(b=>b.onclick=()=>setActiveVoice(b.dataset.v));document.querySelectorAll('#duration button').forEach(b=>b.onclick=()=>{state.duration=+b.dataset.d;render()});document.querySelectorAll('#layoutSwitch button').forEach(b=>b.onclick=()=>{state.layout=+b.dataset.layout;save();render()});document.getElementById('zoomIn').onclick=()=>zoom(.1);document.getElementById('zoomOut').onclick=()=>zoom(-.1);
-document.getElementById('saveBtn').onclick=()=>save();document.getElementById('newBtn').onclick=()=>{if(confirm('Vytvořit nový projekt?')){localStorage.removeItem(LS);location.reload()}};
-document.getElementById('applyLyric').onclick=()=>{if(!state.selected)return;const text=document.getElementById('lyricInput').value;for(const v of voices){const e=state.events[v].find(x=>x.id===state.selected);if(e)e.lyric=text;}save();render()};
-document.getElementById('exportBtn').onclick=()=>{const blob=new Blob([JSON.stringify(state,null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=(state.title||'quartet-project')+'.quartet.json';a.click();URL.revokeObjectURL(a.href)};
-document.getElementById('importBtn').onclick=()=>document.getElementById('fileInput').click();document.getElementById('fileInput').onchange=async e=>{const f=e.target.files[0];if(!f)return;try{state=JSON.parse(await f.text());save('Projekt načten');render()}catch{alert('Soubor není platný projekt.')}};
-const g=document.getElementById('griff');Object.entries(griffMap).slice(0,14).forEach(([k,p])=>{const d=document.createElement('button');d.className='key';d.textContent=k.toUpperCase()+'\n'+p;d.onclick=()=>addNote(p);g.appendChild(d)});
-render();save('Projekt připraven');
-})();
-</script>
-</body>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#2d6cdf" />
+    <title>Quartet Workspace</title>
+  </head>
+  <body>
+    <!-- Intentionally empty: React owns the entire user interface. -->
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
 </html>
