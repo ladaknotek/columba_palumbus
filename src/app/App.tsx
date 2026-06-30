@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import {
+  advanceCursor,
   createEmptyProject,
   defaultMidiForVoice,
+  getCursorAfterLastVoiceEvent,
+  type CursorPosition,
   type Duration,
   type NoteEvent,
   type ScoreProject,
@@ -25,7 +28,7 @@ import {
   saveProject,
 } from '../features/projects/projectStorage';
 
-const SLOT_COUNT = 4;
+const SYSTEM_MEASURES = 4;
 
 export function App() {
   const [project, setProject] = useState<ScoreProject>(
@@ -34,7 +37,10 @@ export function App() {
 
   const [activeVoice, setActiveVoice] = useState<VoiceId>('s');
   const [duration, setDuration] = useState<Duration>('quarter');
-  const [cursor, setCursor] = useState({ measure: 0, slot: 0 });
+  const [cursor, setCursor] = useState<CursorPosition>({
+    measure: 0,
+    slot: 0,
+  });
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [playingEventId, setPlayingEventId] = useState<string | null>(null);
   const [status, setStatus] = useState('Připraveno');
@@ -43,7 +49,17 @@ export function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const playbackRef = useRef(new PlaybackEngine());
 
-  // Autosave se zpozděním: při rychlém zápisu neukládáme po každém stisku zvlášť.
+  /**
+   * Při prvním otevření existujícího projektu nezačínáme vždy na taktu 1.
+   * Výchozí hlas je soprán, proto kurzor přesuneme za poslední sopránovou notu.
+   */
+  useEffect(() => {
+    moveCursorToVoiceEnd('s');
+    // Úmyslně jen při prvním načtení aplikace.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Autosave se zpožděním: při rychlém zápisu neukládáme po každém stisku zvlášť.
   useEffect(() => {
     const timer = window.setTimeout(() => {
       saveProject(project);
@@ -95,9 +111,58 @@ export function App() {
     }));
   }
 
+  function requiredMeasureCount(measure: number): number {
+    return Math.max(
+      SYSTEM_MEASURES,
+      (Math.floor(measure / SYSTEM_MEASURES) + 1) * SYSTEM_MEASURES,
+    );
+  }
+
+  /**
+   * Kurzor může být hned za posledním existujícím taktem.
+   * V tom případě rovnou vytvoříme další systém, aby byl kurzor viditelný
+   * a šlo do něj okamžitě psát.
+   */
+  function ensureCursorIsVisible(position: CursorPosition) {
+    const minimumMeasureCount = requiredMeasureCount(position.measure);
+
+    setProject((current) => {
+      if (current.measureCount >= minimumMeasureCount) {
+        return current;
+      }
+
+      return {
+        ...current,
+        measureCount: minimumMeasureCount,
+        updatedAt: new Date().toISOString(),
+      };
+    });
+  }
+
+  function setInsertionCursor(position: CursorPosition) {
+    setCursor(position);
+    setSelectedEventId(null);
+    ensureCursorIsVisible(position);
+  }
+
+  function moveCursorToVoiceEnd(voiceId: VoiceId) {
+    const position = getCursorAfterLastVoiceEvent(project.events, voiceId);
+    setCursor(position);
+    ensureCursorIsVisible(position);
+  }
+
+  /**
+   * Přepnutí hlasu nikdy nepřebírá kurzor z předchozího hlasu.
+   * Každý hlas má vlastní logickou „pracovní pozici“ za svou poslední notou.
+   */
+  function activateVoice(voiceId: VoiceId) {
+    setActiveVoice(voiceId);
+    setSelectedEventId(null);
+    moveCursorToVoiceEnd(voiceId);
+  }
+
   function insertNote(midi: number) {
     const id = crypto.randomUUID();
-
     const event: NoteEvent = {
       id,
       voiceId: activeVoice,
@@ -107,8 +172,12 @@ export function App() {
       duration,
     };
 
+    const nextCursor = advanceCursor(cursor, duration);
+    const minimumMeasureCount = requiredMeasureCount(nextCursor.measure);
+
     updateProject((current) => ({
       ...current,
+      measureCount: Math.max(current.measureCount, minimumMeasureCount),
       events: [
         ...current.events.filter(
           (existing) => !(
@@ -123,7 +192,7 @@ export function App() {
 
     setSelectedEventId(id);
 
-    // Nově: okamžitá zvuková odezva při zápisu noty.
+    // Okamžitá zvuková odezva při zápisu noty.
     playbackRef.current.previewNote({
       midi,
       duration,
@@ -131,35 +200,18 @@ export function App() {
       soundStyle: project.playbackSound,
     });
 
-    advanceCursor();
-  }
-
-  function advanceCursor() {
-    setCursor((current) => {
-      const nextSlot = current.slot + 1;
-
-      if (nextSlot < SLOT_COUNT) {
-        return { ...current, slot: nextSlot };
-      }
-
-      const nextMeasure = current.measure + 1;
-
-      if (nextMeasure >= project.measureCount) {
-        updateProject((score) => ({
-          ...score,
-          measureCount: score.measureCount + 4,
-        }));
-      }
-
-      return { measure: nextMeasure, slot: 0 };
-    });
+    setCursor(nextCursor);
   }
 
   function deleteSelectedOrLast() {
     const target = selectedEventId
-      ?? [...project.events]
+      ? project.events.find((event) => event.id === selectedEventId)
+      : [...project.events]
         .filter((item) => item.voiceId === activeVoice)
-        .at(-1)?.id;
+        .sort((left, right) => (
+          right.measure - left.measure || right.slot - left.slot
+        ))
+        .at(0);
 
     if (!target) {
       return;
@@ -167,9 +219,11 @@ export function App() {
 
     updateProject((current) => ({
       ...current,
-      events: current.events.filter((event) => event.id !== target),
+      events: current.events.filter((event) => event.id !== target.id),
     }));
 
+    // Po Backspace je přirozené pokračovat přesně na uvolněném místě.
+    setCursor({ measure: target.measure, slot: target.slot });
     setSelectedEventId(null);
   }
 
@@ -178,6 +232,15 @@ export function App() {
     [project.events, selectedEventId],
   );
 
+  function selectEvent(event: NoteEvent) {
+    setSelectedEventId(event.id);
+    setActiveVoice(event.voiceId);
+
+    // Kliknutí na notu je výběr pro text a vlastnosti, ne příkaz k přepsání.
+    // Zápis dál pokračuje za poslední notou stejného hlasu.
+    moveCursorToVoiceEnd(event.voiceId);
+  }
+
   function changeLyric(value: string) {
     if (!selectedEventId) {
       return;
@@ -185,11 +248,11 @@ export function App() {
 
     updateProject((current) => ({
       ...current,
-      events: current.events.map((event) =>
+      events: current.events.map((event) => (
         event.id === selectedEventId
           ? { ...event, lyric: value || undefined }
-          : event,
-      ),
+          : event
+      )),
     }));
   }
 
@@ -208,6 +271,7 @@ export function App() {
 
     playbackRef.current.stop();
     setProject(createEmptyProject());
+    setActiveVoice('s');
     setCursor({ measure: 0, slot: 0 });
     setSelectedEventId(null);
     setPlayingEventId(null);
@@ -217,7 +281,21 @@ export function App() {
     readProjectFile(file)
       .then((loaded) => {
         playbackRef.current.stop();
-        setProject(loaded);
+
+        const firstCursor = getCursorAfterLastVoiceEvent(
+          loaded.events,
+          activeVoice,
+        );
+
+        setProject({
+          ...loaded,
+          measureCount: Math.max(
+            loaded.measureCount,
+            requiredMeasureCount(firstCursor.measure),
+          ),
+        });
+        setCursor(firstCursor);
+        setSelectedEventId(null);
         setPlayingEventId(null);
         setStatus('Projekt otevřen');
       })
@@ -293,11 +371,10 @@ export function App() {
         <span className="status">{status}</span>
       </header>
 
-      {/* Přesně tři přímé položky gridu: levý panel, editor, pravý panel. */}
       <div className="workspace">
         <VoicePanel
           activeVoice={activeVoice}
-          onVoiceChange={setActiveVoice}
+          onVoiceChange={activateVoice}
         />
 
         <main className="editor-main">
@@ -318,7 +395,7 @@ export function App() {
                 min="30"
                 max="300"
                 value={project.tempo}
-                onChange={(event) =>
+                onChange={(event) => (
                   updateProject((current) => ({
                     ...current,
                     tempo: Math.max(
@@ -326,7 +403,7 @@ export function App() {
                       Math.min(300, Number(event.target.value) || 96),
                     ),
                   }))
-                }
+                )}
               />
             </label>
 
@@ -339,12 +416,12 @@ export function App() {
             duration={duration}
             layoutMode={project.layoutMode}
             onDurationChange={setDuration}
-            onLayoutChange={(layoutMode) =>
+            onLayoutChange={(layoutMode) => (
               updateProject((current) => ({
                 ...current,
                 layoutMode,
               }))
-            }
+            )}
           />
 
           <div
@@ -356,15 +433,15 @@ export function App() {
 
               event.preventDefault();
 
-              setZoom((current) =>
+              setZoom((current) => (
                 Math.max(
                   0.55,
                   Math.min(
                     1.85,
                     current + (event.deltaY < 0 ? 0.1 : -0.1),
                   ),
-                ),
-              );
+                )
+              ));
             }}
           >
             <div className="zoom-hint">
@@ -378,12 +455,11 @@ export function App() {
               <ScoreRenderer
                 project={project}
                 activeVoice={activeVoice}
+                cursor={cursor}
                 selectedEventId={selectedEventId}
                 playingEventId={playingEventId}
-                onSelectEvent={(event) => {
-                  setSelectedEventId(event.id);
-                  setActiveVoice(event.voiceId);
-                }}
+                onSelectEvent={selectEvent}
+                onCursorChange={setInsertionCursor}
               />
             </div>
           </div>
@@ -416,14 +492,14 @@ export function App() {
                 onClick={() => {
                   updateProject((current) => ({
                     ...current,
-                    events: current.events.map((event) =>
+                    events: current.events.map((event) => (
                       event.id === selectedEvent.id
                         ? {
                             ...event,
                             midi: defaultMidiForVoice(event.voiceId),
                           }
-                        : event,
-                    ),
+                        : event
+                    )),
                   }));
                 }}
               >
@@ -432,7 +508,8 @@ export function App() {
             </>
           ) : (
             <p className="muted">
-              Vyber notu v partituře. Pak jí můžeš přiřadit slabiku textu.
+              Klikni do aktivní osnovy pro umístění kurzoru nebo vyber notu
+              pro přidání textu.
             </p>
           )}
 

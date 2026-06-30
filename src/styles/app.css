@@ -441,3 +441,30 @@ button.primary {
   .toolbar-tip { display: none; }
   .sound-style-label span { display: none; }
 }
+
+/* Vkládací kurzor a klikací rytmická mřížka v aktivní osnově. */
+.measure.cursor-target {
+  cursor: crosshair;
+}
+
+.measure.cursor-target::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: transparent;
+  transition: background-color .12s ease;
+}
+
+.measure.cursor-target:hover::before {
+  background: rgb(45 108 223 / 7%);
+}
+
+.score-cursor {
+  position: absolute;
+  top: 4px;
+  height: 50px;
+  border-left: 2px solid #2d6cdf;
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 75%);
+  pointer-events: none;
+  z-index: 4;
+}
