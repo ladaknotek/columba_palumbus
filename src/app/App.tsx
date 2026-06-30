@@ -6,6 +6,7 @@ import {
   type Duration,
   type NoteEvent,
   type ScoreProject,
+  type SoundStyle,
   type VoiceId,
 } from '../domain/score';
 
@@ -14,15 +15,15 @@ import {
   NotationToolbar,
   VoicePanel,
 } from '../features/editor/EditorControls';
-
 import { ScoreRenderer } from '../features/editor/ScoreRenderer';
+import { PlaybackControls } from '../features/playback/PlaybackControls';
+import { PlaybackEngine } from '../features/playback/playbackEngine';
 import {
   downloadProject,
   loadProject,
   readProjectFile,
   saveProject,
 } from '../features/projects/projectStorage';
-import { PlaybackEngine } from '../features/playback/playbackEngine';
 
 const SLOT_COUNT = 4;
 
@@ -42,6 +43,7 @@ export function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const playbackRef = useRef(new PlaybackEngine());
 
+  // Autosave se zpozděním: při rychlém zápisu neukládáme po každém stisku zvlášť.
   useEffect(() => {
     const timer = window.setTimeout(() => {
       saveProject(project);
@@ -53,7 +55,7 @@ export function App() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if ((event.target as HTMLElement)?.matches('input, textarea')) {
+      if ((event.target as HTMLElement)?.matches('input, textarea, select')) {
         return;
       }
 
@@ -109,18 +111,26 @@ export function App() {
       ...current,
       events: [
         ...current.events.filter(
-          (existing) =>
-            !(
-              existing.voiceId === activeVoice
-              && existing.measure === cursor.measure
-              && existing.slot === cursor.slot
-            ),
+          (existing) => !(
+            existing.voiceId === activeVoice
+            && existing.measure === cursor.measure
+            && existing.slot === cursor.slot
+          ),
         ),
         event,
       ],
     }));
 
     setSelectedEventId(id);
+
+    // Nově: okamžitá zvuková odezva při zápisu noty.
+    playbackRef.current.previewNote({
+      midi,
+      duration,
+      tempo: project.tempo,
+      soundStyle: project.playbackSound,
+    });
+
     advanceCursor();
   }
 
@@ -146,8 +156,7 @@ export function App() {
   }
 
   function deleteSelectedOrLast() {
-    const target =
-      selectedEventId
+    const target = selectedEventId
       ?? [...project.events]
         .filter((item) => item.voiceId === activeVoice)
         .at(-1)?.id;
@@ -188,6 +197,10 @@ export function App() {
     updateProject((current) => ({ ...current, title: value }));
   }
 
+  function changePlaybackSound(soundStyle: SoundStyle) {
+    updateProject((current) => ({ ...current, playbackSound: soundStyle }));
+  }
+
   function resetProject() {
     if (!confirm('Opravdu vytvořit nový projekt?')) {
       return;
@@ -197,19 +210,26 @@ export function App() {
     setProject(createEmptyProject());
     setCursor({ measure: 0, slot: 0 });
     setSelectedEventId(null);
+    setPlayingEventId(null);
   }
 
   function importProject(file: File) {
     readProjectFile(file)
       .then((loaded) => {
+        playbackRef.current.stop();
         setProject(loaded);
+        setPlayingEventId(null);
         setStatus('Projekt otevřen');
       })
       .catch((error: Error) => alert(error.message));
   }
 
   function play() {
-    playbackRef.current.play(project, setPlayingEventId);
+    playbackRef.current.play(
+      project,
+      project.playbackSound,
+      setPlayingEventId,
+    );
   }
 
   function stop() {
@@ -241,10 +261,7 @@ export function App() {
           Export
         </button>
 
-        <button
-          type="button"
-          onClick={() => fileInputRef.current?.click()}
-        >
+        <button type="button" onClick={() => fileInputRef.current?.click()}>
           Otevřít
         </button>
 
@@ -266,13 +283,12 @@ export function App() {
 
         <span className="header-spacer" />
 
-        <button type="button" className="play-button" onClick={play}>
-          ▶ Přehrát
-        </button>
-
-        <button type="button" onClick={stop}>
-          ■ Stop
-        </button>
+        <PlaybackControls
+          soundStyle={project.playbackSound}
+          onSoundStyleChange={changePlaybackSound}
+          onPlay={play}
+          onStop={stop}
+        />
 
         <span className="status">{status}</span>
       </header>
