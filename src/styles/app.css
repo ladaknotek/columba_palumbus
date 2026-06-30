@@ -6,9 +6,29 @@
 
 * { box-sizing: border-box; }
 
+html,
+body,
+#root {
+  height: 100%;
+}
+
 body {
   margin: 0;
   min-width: 1040px;
+  overflow: hidden;
+}
+
+/*
+ * Celá aplikace přesně vyplní okno prohlížeče.
+ * Rolovat se smí jen obsah editoru a případně obsah bočních panelů,
+ * ne celá stránka. Díky tomu zůstává horní lišta i nástroje viditelné.
+ */
+.app-shell {
+  height: 100vh;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 button, input, textarea, select { font: inherit; }
@@ -38,6 +58,7 @@ button.primary {
 }
 
 .app-header {
+  flex: 0 0 58px;
   height: 58px;
   background: #fff;
   border-bottom: 1px solid #d9e0e8;
@@ -45,8 +66,7 @@ button.primary {
   align-items: center;
   gap: 8px;
   padding: 0 18px;
-  position: sticky;
-  top: 0;
+  position: relative;
   z-index: 20;
 }
 
@@ -98,13 +118,18 @@ button.primary {
 }
 
 .workspace {
+  flex: 1 1 auto;
+  min-height: 0;
   display: grid;
   grid-template-columns: 190px minmax(0, 1fr) 290px;
-  min-height: calc(100vh - 58px);
+  overflow: hidden;
 }
 
 .left-panel,
 .right-panel {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   background: #fff;
   padding: 14px;
 }
@@ -153,6 +178,8 @@ button.primary {
 
 .editor-main {
   min-width: 0;
+  min-height: 0;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
 }
@@ -258,7 +285,8 @@ button.primary {
 }
 
 .editor-scroll {
-  flex: 1;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
   padding: 30px;
   position: relative;
