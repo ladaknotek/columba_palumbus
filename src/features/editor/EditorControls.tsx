@@ -1,20 +1,39 @@
-import type { Duration, LayoutMode, VoiceId } from '../../domain/score';
+import type { ReactNode } from 'react';
+
+import type {
+  Duration,
+  EntryMode,
+  InputMode,
+  LayoutMode,
+  RecordQuantization,
+  ScoreViewMode,
+  VoiceId,
+} from '../../domain/score';
 import { VOICES } from '../../domain/score';
 
 interface VoicePanelProps {
   activeVoice: VoiceId;
-  onVoiceChange: (value: VoiceId) => void;
+  onVoiceChange: (voiceId: VoiceId) => void;
 }
 
 interface NotationToolbarProps {
   duration: Duration;
   layoutMode: LayoutMode;
-  onDurationChange: (value: Duration) => void;
-  onLayoutChange: (value: LayoutMode) => void;
-}
-
-interface GriffPanelProps {
-  onInsertNote: (midi: number) => void;
+  viewMode: ScoreViewMode;
+  inputMode: InputMode;
+  entryMode: EntryMode;
+  quantization: RecordQuantization;
+  metronomeRunning: boolean;
+  isRecording: boolean;
+  currentBeat: number | null;
+  onDurationChange: (duration: Duration) => void;
+  onLayoutChange: (layoutMode: LayoutMode) => void;
+  onViewModeChange: (viewMode: ScoreViewMode) => void;
+  onInputModeChange: (inputMode: InputMode) => void;
+  onEntryModeChange: (entryMode: EntryMode) => void;
+  onQuantizationChange: (quantization: RecordQuantization) => void;
+  onToggleMetronome: () => void;
+  onToggleRecording: () => void;
 }
 
 const DURATIONS: ReadonlyArray<{ id: Duration; label: string }> = [
@@ -22,15 +41,10 @@ const DURATIONS: ReadonlyArray<{ id: Duration; label: string }> = [
   { id: 'half', label: 'Půl' },
   { id: 'quarter', label: '¼' },
   { id: 'eighth', label: '⅛' },
+  { id: 'sixteenth', label: '1/16' },
 ];
 
-/**
- * Levý panel je samostatná položka hlavního gridu.
- */
-export function VoicePanel({
-  activeVoice,
-  onVoiceChange,
-}: VoicePanelProps) {
+export function VoicePanel({ activeVoice, onVoiceChange }: VoicePanelProps) {
   return (
     <aside className="left-panel">
       <div className="panel-heading">Hlasy</div>
@@ -46,90 +60,192 @@ export function VoicePanel({
           {voice.name}
         </button>
       ))}
+
+      <p className="panel-help">
+        Výběr hlasu určuje, do kterého partu se zapisuje a který samostatný
+        hlas se zobrazí v režimu Part.
+      </p>
     </aside>
   );
 }
 
-/**
- * Nástrojová lišta patří dovnitř středního editoru.
- */
 export function NotationToolbar({
   duration,
   layoutMode,
+  viewMode,
+  inputMode,
+  entryMode,
+  quantization,
+  metronomeRunning,
+  isRecording,
+  currentBeat,
   onDurationChange,
   onLayoutChange,
+  onViewModeChange,
+  onInputModeChange,
+  onEntryModeChange,
+  onQuantizationChange,
+  onToggleMetronome,
+  onToggleRecording,
 }: NotationToolbarProps) {
   return (
-    <div className="editor-toolbar">
-      <span className="tool-label">Délka</span>
+    <div className="editor-toolbar notation-toolbar">
+      <ToolbarGroup label="Pohled">
+        <SegmentButton
+          active={viewMode === 'score'}
+          onClick={() => onViewModeChange('score')}
+        >
+          Partitura
+        </SegmentButton>
+        <SegmentButton
+          active={viewMode === 'part'}
+          onClick={() => onViewModeChange('part')}
+        >
+          Aktivní hlas
+        </SegmentButton>
+      </ToolbarGroup>
 
-      <div className="button-group">
-        {DURATIONS.map((item) => (
+      {viewMode === 'score' && (
+        <ToolbarGroup label="Osnovy">
+          <SegmentButton
+            active={layoutMode === 'two-staves'}
+            onClick={() => onLayoutChange('two-staves')}
+          >
+            2 osnovy
+          </SegmentButton>
+          <SegmentButton
+            active={layoutMode === 'four-staves'}
+            onClick={() => onLayoutChange('four-staves')}
+          >
+            4 osnovy
+          </SegmentButton>
+        </ToolbarGroup>
+      )}
+
+      <ToolbarGroup label="Zápis">
+        <SegmentButton
+          active={inputMode === 'letter'}
+          onClick={() => onInputModeChange('letter')}
+        >
+          C D E F G A H
+        </SegmentButton>
+        <SegmentButton
+          active={inputMode === 'bgriff'}
+          onClick={() => onInputModeChange('bgriff')}
+        >
+          B-griff
+        </SegmentButton>
+      </ToolbarGroup>
+
+      <ToolbarGroup label="Režim">
+        <SegmentButton
+          active={entryMode === 'step'}
+          onClick={() => onEntryModeChange('step')}
+        >
+          Krokový
+        </SegmentButton>
+        <SegmentButton
+          active={entryMode === 'live'}
+          onClick={() => onEntryModeChange('live')}
+        >
+          Živý
+        </SegmentButton>
+      </ToolbarGroup>
+
+      {entryMode === 'step' ? (
+        <ToolbarGroup label="Délka">
+          {DURATIONS.map((item) => (
+            <SegmentButton
+              active={duration === item.id}
+              key={item.id}
+              onClick={() => onDurationChange(item.id)}
+            >
+              {item.label}
+            </SegmentButton>
+          ))}
+        </ToolbarGroup>
+      ) : (
+        <>
+          <ToolbarGroup label="Kvantizace">
+            <SegmentButton
+              active={quantization === 'quarter'}
+              onClick={() => onQuantizationChange('quarter')}
+            >
+              ¼
+            </SegmentButton>
+            <SegmentButton
+              active={quantization === 'eighth'}
+              onClick={() => onQuantizationChange('eighth')}
+            >
+              ⅛
+            </SegmentButton>
+            <SegmentButton
+              active={quantization === 'sixteenth'}
+              onClick={() => onQuantizationChange('sixteenth')}
+            >
+              1/16
+            </SegmentButton>
+          </ToolbarGroup>
+
           <button
             type="button"
-            key={item.id}
-            className={duration === item.id ? 'active' : ''}
-            onClick={() => onDurationChange(item.id)}
+            className={metronomeRunning ? 'metronome-button active' : 'metronome-button'}
+            onClick={onToggleMetronome}
+            title="Zapnout nebo zastavit metronom"
           >
-            {item.label}
+            ♪ Metronom{currentBeat ? ` ${currentBeat}` : ''}
           </button>
-        ))}
-      </div>
 
-      <span className="tool-label">Zobrazení</span>
-
-      <div className="button-group">
-        <button
-          type="button"
-          className={layoutMode === 'two-staves' ? 'active' : ''}
-          onClick={() => onLayoutChange('two-staves')}
-        >
-          2 osnovy
-        </button>
-
-        <button
-          type="button"
-          className={layoutMode === 'four-staves' ? 'active' : ''}
-          onClick={() => onLayoutChange('four-staves')}
-        >
-          4 osnovy
-        </button>
-      </div>
+          <button
+            type="button"
+            className={isRecording ? 'record-button recording' : 'record-button'}
+            onClick={onToggleRecording}
+          >
+            {isRecording ? '■ Ukončit záznam' : '● Záznam'}
+          </button>
+        </>
+      )}
 
       <span className="toolbar-tip">
-        Zápis: C D E F G A H · Ctrl + kolečko: zoom
+        {entryMode === 'live'
+          ? 'Záznam: stisk začíná a puštění klávesy určuje délku noty.'
+          : 'Kliknutím do aktivní osnovy nastavíš kurzor. Ctrl + kolečko: zoom.'}
       </span>
     </div>
   );
 }
 
-/**
- * B-griff patří do pravého panelu, ne jako další položka gridu.
- */
-export function GriffPanel({ onInsertNote }: GriffPanelProps) {
-  const keys = [
-    ['Q', 60], ['W', 62], ['E', 64], ['R', 65],
-    ['T', 67], ['Y', 69], ['U', 71], ['A', 72],
-    ['S', 74], ['D', 76], ['F', 77], ['G', 79],
-    ['H', 81], ['J', 83],
-  ] as const;
-
+function ToolbarGroup({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
   return (
-    <section className="griff-panel">
-      <strong>B-griff vstup</strong>
+    <div className="toolbar-group">
+      <span className="tool-label">{label}</span>
+      <div className="button-group">{children}</div>
+    </div>
+  );
+}
 
-      <div className="griff-buttons">
-        {keys.map(([key, midi]) => (
-          <button
-            type="button"
-            key={key}
-            onClick={() => onInsertNote(midi)}
-          >
-            {key}
-            <small>{midi}</small>
-          </button>
-        ))}
-      </div>
-    </section>
+function SegmentButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      className={active ? 'active' : ''}
+      onClick={onClick}
+    >
+      {children}
+    </button>
   );
 }

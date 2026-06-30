@@ -1,5 +1,6 @@
 import {
   durationToBeats,
+  TICKS_PER_BEAT,
   type Duration,
   type ScoreProject,
   type SoundStyle,
@@ -35,7 +36,6 @@ export class PlaybackEngine {
 
     for (const source of this.sources) {
       try {
-        // Ukončí i noty, které jsou teprve naplánované do budoucna.
         source.stop(now + 0.015);
       } catch {
         // Oscilátor už mohl být ukončen.
@@ -45,11 +45,10 @@ export class PlaybackEngine {
     this.sources.clear();
   }
 
-  /** Krátký zvukový náhled po vložení noty klávesou nebo B-griffem. */
+  /** Krátký zvukový náhled po vložení noty klávesou nebo myší. */
   previewNote(options: PreviewNoteOptions): void {
     const context = this.ensureContext();
     const secondsPerBeat = 60 / options.tempo;
-
     const previewDuration = Math.min(
       0.9,
       Math.max(0.16, durationToBeats(options.duration) * secondsPerBeat),
@@ -75,12 +74,8 @@ export class PlaybackEngine {
 
     const currentToken = this.playbackToken;
     const context = this.ensureContext();
-
     const orderedEvents = [...project.events].sort(
-      (a, b) =>
-        a.measure - b.measure
-        || a.slot - b.slot
-        || a.midi - b.midi,
+      (a, b) => a.startTick - b.startTick || a.midi - b.midi,
     );
 
     if (orderedEvents.length === 0) {
@@ -92,18 +87,10 @@ export class PlaybackEngine {
     let endTime = startTime;
 
     for (const event of orderedEvents) {
-      /**
-       * Sloty 0, 1, 2, 3 znamenají čtyři doby v taktu 4/4.
-       *
-       * Původní výpočet používal `slot / 2`, takže čtyři čtvrťové noty
-       * zabrali pouze dvě doby a před dalším taktem vznikla velká pauza.
-       */
-      const eventStart =
-        startTime
-        + (event.measure * 4 + event.slot) * secondsPerBeat;
-
-      const eventDuration =
-        durationToBeats(event.duration) * secondsPerBeat;
+      const eventStart = startTime
+        + (event.startTick / TICKS_PER_BEAT) * secondsPerBeat;
+      const eventDuration = (event.durationTicks / TICKS_PER_BEAT)
+        * secondsPerBeat;
 
       this.scheduleNote(
         context,
@@ -165,7 +152,6 @@ export class PlaybackEngine {
   ): void {
     const frequency = 440 * 2 ** ((midi - 69) / 12);
     const noteGain = context.createGain();
-
     noteGain.connect(context.destination);
 
     const releaseSeconds = soundStyle === 'vocal' ? 0.06 : 0.03;
@@ -187,14 +173,12 @@ export class PlaybackEngine {
 
       fundamental.connect(noteGain);
       harmonic.connect(harmonicGain).connect(noteGain);
-
       this.startAndTrack([fundamental, harmonic], startTime, endTime);
       return;
     }
 
     this.applyVocalEnvelope(noteGain, startTime, duration, endTime, volume);
 
-    // Vokální charakter: základní tón + dvě jednoduché formantové rezonance.
     const voice = context.createOscillator();
     voice.type = 'sawtooth';
     voice.frequency.setValueAtTime(frequency, startTime);
@@ -219,7 +203,6 @@ export class PlaybackEngine {
     voice.connect(formantA).connect(noteGain);
     voice.connect(formantB).connect(noteGain);
     fundamental.connect(fundamentalGain).connect(noteGain);
-
     this.startAndTrack([voice, fundamental], startTime, endTime);
   }
 
@@ -239,8 +222,6 @@ export class PlaybackEngine {
       Math.max(0.0001, volume * 0.34),
       decayTime,
     );
-
-    // Zvuk neskončí uměle na 92 % noty jako v původní verzi.
     gain.exponentialRampToValueAtTime(0.0001, endTime);
   }
 
@@ -268,17 +249,14 @@ export class PlaybackEngine {
   ): void {
     for (const source of sources) {
       this.sources.add(source);
-
       source.onended = () => {
         this.sources.delete(source);
-
         try {
           source.disconnect();
         } catch {
-          // Oscilátor už může být odpojený.
+          // Už odpojeno.
         }
       };
-
       source.start(startTime);
       source.stop(endTime);
     }

@@ -4,21 +4,38 @@ import {
   advanceCursor,
   createEmptyProject,
   defaultMidiForVoice,
+  durationToTicks,
   getCursorAfterLastVoiceEvent,
+  quantizationToTicks,
+  tickToBeatNumber,
+  tickToMeasure,
   type CursorPosition,
   type Duration,
+  type EntryMode,
+  type InputMode,
   type NoteEvent,
+  type RecordQuantization,
   type ScoreProject,
+  type ScoreViewMode,
   type SoundStyle,
   type VoiceId,
 } from '../domain/score';
 
 import {
-  GriffPanel,
   NotationToolbar,
   VoicePanel,
 } from '../features/editor/EditorControls';
+import { InputPanel } from '../features/editor/InputPanel';
 import { ScoreRenderer } from '../features/editor/ScoreRenderer';
+import {
+  loadInputSettings,
+  saveInputSettings,
+  type InputSettings,
+} from '../features/input/inputSettings';
+import {
+  midiForKeyboardKey,
+  normalizeKeyboardKey,
+} from '../features/input/keyboardMaps';
 import { PlaybackControls } from '../features/playback/PlaybackControls';
 import { PlaybackEngine } from '../features/playback/playbackEngine';
 import {
@@ -27,69 +44,137 @@ import {
   readProjectFile,
   saveProject,
 } from '../features/projects/projectStorage';
+import { Metronome } from '../features/recording/Metronome';
 
 const SYSTEM_MEASURES = 4;
+
+interface HeldLiveInput {
+  midi: number;
+  voiceId: VoiceId;
+  startedAt: number;
+}
+
+interface LiveRecordingSession {
+  baseTick: number;
+  startedAt: number;
+  tempo: number;
+  quantizationTicks: number;
+  startedMetronome: boolean;
+}
 
 export function App() {
   const [project, setProject] = useState<ScoreProject>(
     () => loadProject() ?? createEmptyProject(),
   );
+  const [inputSettings, setInputSettings] = useState<InputSettings>(
+    () => loadInputSettings(),
+  );
 
   const [activeVoice, setActiveVoice] = useState<VoiceId>('s');
   const [duration, setDuration] = useState<Duration>('quarter');
-  const [cursor, setCursor] = useState<CursorPosition>({
-    measure: 0,
-    slot: 0,
-  });
+  const [viewMode, setViewMode] = useState<ScoreViewMode>('score');
+  const [entryMode, setEntryMode] = useState<EntryMode>('step');
+  const [quantization, setQuantization] = useState<RecordQuantization>('eighth');
+  const [cursor, setCursor] = useState<CursorPosition>({ tick: 0 });
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [playingEventId, setPlayingEventId] = useState<string | null>(null);
   const [status, setStatus] = useState('Připraveno');
   const [zoom, setZoom] = useState(1);
+  const [metronomeRunning, setMetronomeRunning] = useState(false);
+  const [metronomeBeat, setMetronomeBeat] = useState<number | null>(null);
+  const [isRecording, setIsRecording] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const playbackRef = useRef(new PlaybackEngine());
+  const metronomeRef = useRef(new Metronome());
 
-  /**
-   * Při prvním otevření existujícího projektu nezačínáme vždy na taktu 1.
-   * Výchozí hlas je soprán, proto kurzor přesuneme za poslední sopránovou notu.
-   */
+  // Refs dovolují klávesovým událostem pracovat se zcela aktuálním stavem
+  // i při rychlém hraní několika not za sebou mezi dvěma React rendery.
+  const projectRef = useRef(project);
+  const activeVoiceRef = useRef(activeVoice);
+  const durationRef = useRef(duration);
+  const inputModeRef = useRef<InputMode>(inputSettings.inputMode);
+  const bGriffBaseRef = useRef(inputSettings.bGriffBaseMidi);
+  const entryModeRef = useRef(entryMode);
+  const cursorRef = useRef(cursor);
+  const isRecordingRef = useRef(isRecording);
+  const recordingSessionRef = useRef<LiveRecordingSession | null>(null);
+  const heldLiveInputsRef = useRef(new Map<string, HeldLiveInput>());
+
+  useEffect(() => { projectRef.current = project; }, [project]);
+  useEffect(() => { activeVoiceRef.current = activeVoice; }, [activeVoice]);
+  useEffect(() => { durationRef.current = duration; }, [duration]);
+  useEffect(() => { inputModeRef.current = inputSettings.inputMode; }, [inputSettings.inputMode]);
+  useEffect(() => { bGriffBaseRef.current = inputSettings.bGriffBaseMidi; }, [inputSettings.bGriffBaseMidi]);
+  useEffect(() => { entryModeRef.current = entryMode; }, [entryMode]);
+  useEffect(() => { cursorRef.current = cursor; }, [cursor]);
+  useEffect(() => { isRecordingRef.current = isRecording; }, [isRecording]);
+
+  /** Při načtení existující skladby pokračujeme za poslední sopránovou notou. */
   useEffect(() => {
     moveCursorToVoiceEnd('s');
-    // Úmyslně jen při prvním načtení aplikace.
+    // Úmyslně jen při prvním načtení.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Autosave se zpožděním: při rychlém zápisu neukládáme po každém stisku zvlášť.
+  /** Autosave projektu. Nastavení klávesnice se ukládá zvlášť jako uživatelská preference. */
   useEffect(() => {
     const timer = window.setTimeout(() => {
       saveProject(project);
-      setStatus('Uloženo lokálně');
+      setStatus((current) => current.startsWith('Záznam') ? current : 'Uloženo lokálně');
     }, 350);
 
     return () => window.clearTimeout(timer);
   }, [project]);
 
   useEffect(() => {
+    saveInputSettings(inputSettings);
+  }, [inputSettings]);
+
+  useEffect(() => {
+    return () => {
+      playbackRef.current.stop();
+      metronomeRef.current.stop();
+    };
+  }, []);
+
+  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if ((event.target as HTMLElement)?.matches('input, textarea, select')) {
+      const target = event.target;
+
+      if (
+        target instanceof HTMLElement
+        && target.matches('input, textarea, select')
+      ) {
         return;
       }
 
-      const noteMap: Record<string, number> = {
-        c: 60,
-        d: 62,
-        e: 64,
-        f: 65,
-        g: 67,
-        a: 69,
-        h: 71,
-      };
+      if (event.ctrlKey || event.metaKey) {
+        return;
+      }
 
-      const midi = noteMap[event.key.toLowerCase()];
+      const midi = midiForKeyboardKey(
+        event.key,
+        inputModeRef.current,
+        bGriffBaseRef.current,
+      );
 
-      if (midi !== undefined) {
+      if (midi !== null) {
         event.preventDefault();
-        insertNote(midi);
+
+        if (event.repeat) {
+          return;
+        }
+
+        const sourceId = `keyboard:${normalizeKeyboardKey(event.key)}`;
+
+        if (entryModeRef.current === 'live' && isRecordingRef.current) {
+          startLiveInput(sourceId, midi);
+        } else {
+          insertStepNote(midi);
+        }
+
+        return;
       }
 
       if (event.key === 'Backspace') {
@@ -98,119 +183,131 @@ export function App() {
       }
     };
 
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (entryModeRef.current !== 'live' || !isRecordingRef.current) {
+        return;
+      }
+
+      const midi = midiForKeyboardKey(
+        event.key,
+        inputModeRef.current,
+        bGriffBaseRef.current,
+      );
+
+      if (midi === null) {
+        return;
+      }
+
+      event.preventDefault();
+      endLiveInput(`keyboard:${normalizeKeyboardKey(event.key)}`);
+    };
+
     window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+    };
   });
 
-  function updateProject(
-    mutator: (current: ScoreProject) => ScoreProject,
-  ) {
-    setProject((current) => ({
-      ...mutator(current),
-      updatedAt: new Date().toISOString(),
-    }));
+  function updateProject(mutator: (current: ScoreProject) => ScoreProject) {
+    setProject((current) => {
+      const next = {
+        ...mutator(current),
+        updatedAt: new Date().toISOString(),
+      };
+
+      projectRef.current = next;
+      return next;
+    });
   }
 
-  function requiredMeasureCount(measure: number): number {
+  function requiredMeasureCountForTick(tick: number): number {
+    const measure = tickToMeasure(tick);
     return Math.max(
       SYSTEM_MEASURES,
       (Math.floor(measure / SYSTEM_MEASURES) + 1) * SYSTEM_MEASURES,
     );
   }
 
-  /**
-   * Kurzor může být hned za posledním existujícím taktem.
-   * V tom případě rovnou vytvoříme další systém, aby byl kurzor viditelný
-   * a šlo do něj okamžitě psát.
-   */
-  function ensureCursorIsVisible(position: CursorPosition) {
-    const minimumMeasureCount = requiredMeasureCount(position.measure);
+  function ensureTickIsVisible(tick: number) {
+    const requiredMeasureCount = requiredMeasureCountForTick(tick);
 
-    setProject((current) => {
-      if (current.measureCount >= minimumMeasureCount) {
-        return current;
-      }
-
-      return {
-        ...current,
-        measureCount: minimumMeasureCount,
-        updatedAt: new Date().toISOString(),
-      };
-    });
+    updateProject((current) => (
+      current.measureCount >= requiredMeasureCount
+        ? current
+        : { ...current, measureCount: requiredMeasureCount }
+    ));
   }
 
-  function setInsertionCursor(position: CursorPosition) {
-    setCursor(position);
-    setSelectedEventId(null);
-    ensureCursorIsVisible(position);
+  function setCursorPosition(position: CursorPosition, ensureVisible = true) {
+    const normalized = { tick: Math.max(0, Math.round(position.tick)) };
+    cursorRef.current = normalized;
+    setCursor(normalized);
+
+    if (ensureVisible) {
+      ensureTickIsVisible(normalized.tick);
+    }
   }
 
   function moveCursorToVoiceEnd(voiceId: VoiceId) {
-    const position = getCursorAfterLastVoiceEvent(project.events, voiceId);
-    setCursor(position);
-    ensureCursorIsVisible(position);
+    const position = getCursorAfterLastVoiceEvent(projectRef.current.events, voiceId);
+    setCursorPosition(position);
   }
 
-  /**
-   * Přepnutí hlasu nikdy nepřebírá kurzor z předchozího hlasu.
-   * Každý hlas má vlastní logickou „pracovní pozici“ za svou poslední notou.
-   */
   function activateVoice(voiceId: VoiceId) {
+    activeVoiceRef.current = voiceId;
     setActiveVoice(voiceId);
     setSelectedEventId(null);
     moveCursorToVoiceEnd(voiceId);
   }
 
-  function insertNote(midi: number) {
-    const id = crypto.randomUUID();
+  /** Krokový zápis používá předvolenou délku a hned posune kurzor. */
+  function insertStepNote(midi: number) {
+    const voiceId = activeVoiceRef.current;
+    const insertionPosition = cursorRef.current;
+    const noteDuration = durationRef.current;
     const event: NoteEvent = {
-      id,
-      voiceId: activeVoice,
-      measure: cursor.measure,
-      slot: cursor.slot,
+      id: crypto.randomUUID(),
+      voiceId,
+      startTick: insertionPosition.tick,
+      durationTicks: durationToTicks(noteDuration),
       midi,
-      duration,
     };
-
-    const nextCursor = advanceCursor(cursor, duration);
-    const minimumMeasureCount = requiredMeasureCount(nextCursor.measure);
+    const nextCursor = advanceCursor(insertionPosition, noteDuration);
 
     updateProject((current) => ({
       ...current,
-      measureCount: Math.max(current.measureCount, minimumMeasureCount),
+      measureCount: Math.max(
+        current.measureCount,
+        requiredMeasureCountForTick(nextCursor.tick),
+      ),
       events: [
-        ...current.events.filter(
-          (existing) => !(
-            existing.voiceId === activeVoice
-            && existing.measure === cursor.measure
-            && existing.slot === cursor.slot
-          ),
-        ),
+        ...current.events.filter((existing) => !(
+          existing.voiceId === voiceId
+          && existing.startTick === insertionPosition.tick
+        )),
         event,
       ],
     }));
 
-    setSelectedEventId(id);
-
-    // Okamžitá zvuková odezva při zápisu noty.
+    setSelectedEventId(event.id);
     playbackRef.current.previewNote({
       midi,
-      duration,
-      tempo: project.tempo,
-      soundStyle: project.playbackSound,
+      duration: noteDuration,
+      tempo: projectRef.current.tempo,
+      soundStyle: projectRef.current.playbackSound,
     });
-
-    setCursor(nextCursor);
+    setCursorPosition(nextCursor, false);
   }
 
   function deleteSelectedOrLast() {
     const target = selectedEventId
-      ? project.events.find((event) => event.id === selectedEventId)
-      : [...project.events]
-        .filter((item) => item.voiceId === activeVoice)
-        .sort((left, right) => (
-          right.measure - left.measure || right.slot - left.slot
-        ))
+      ? projectRef.current.events.find((event) => event.id === selectedEventId)
+      : [...projectRef.current.events]
+        .filter((event) => event.voiceId === activeVoiceRef.current)
+        .sort((left, right) => right.startTick - left.startTick)
         .at(0);
 
     if (!target) {
@@ -222,9 +319,154 @@ export function App() {
       events: current.events.filter((event) => event.id !== target.id),
     }));
 
-    // Po Backspace je přirozené pokračovat přesně na uvolněném místě.
-    setCursor({ measure: target.measure, slot: target.slot });
+    setCursorPosition({ tick: target.startTick }, false);
     setSelectedEventId(null);
+  }
+
+  function startMetronome() {
+    metronomeRef.current.start(projectRef.current.tempo, setMetronomeBeat);
+    setMetronomeRunning(true);
+  }
+
+  function stopMetronome() {
+    metronomeRef.current.stop();
+    setMetronomeRunning(false);
+    setMetronomeBeat(null);
+  }
+
+  function toggleMetronome() {
+    if (metronomeRef.current.isRunning) {
+      stopMetronome();
+    } else {
+      startMetronome();
+    }
+  }
+
+  function startLiveRecording() {
+    if (isRecordingRef.current) {
+      stopLiveRecording();
+      return;
+    }
+
+    const startedMetronome = !metronomeRef.current.isRunning;
+
+    if (startedMetronome) {
+      startMetronome();
+    }
+
+    recordingSessionRef.current = {
+      baseTick: cursorRef.current.tick,
+      startedAt: performance.now(),
+      tempo: projectRef.current.tempo,
+      quantizationTicks: quantizationToTicks(quantization),
+      startedMetronome,
+    };
+
+    isRecordingRef.current = true;
+    setIsRecording(true);
+    setStatus('Záznam běží');
+  }
+
+  function stopLiveRecording() {
+    const activeInputs = [...heldLiveInputsRef.current.keys()];
+
+    for (const sourceId of activeInputs) {
+      endLiveInput(sourceId);
+    }
+
+    const session = recordingSessionRef.current;
+    recordingSessionRef.current = null;
+    isRecordingRef.current = false;
+    setIsRecording(false);
+
+    if (session?.startedMetronome) {
+      stopMetronome();
+    }
+
+    setStatus('Záznam ukončen');
+  }
+
+  /**
+   * Živý záznam je zatím monofonní pro aktivní hlas. Start a délka se při
+   * puštění klávesy zaokrouhlí na zvolenou rytmickou mřížku.
+   */
+  function startLiveInput(sourceId: string, midi: number) {
+    const session = recordingSessionRef.current;
+
+    if (!session || heldLiveInputsRef.current.has(sourceId)) {
+      return;
+    }
+
+    heldLiveInputsRef.current.set(sourceId, {
+      midi,
+      voiceId: activeVoiceRef.current,
+      startedAt: performance.now(),
+    });
+
+    playbackRef.current.previewNote({
+      midi,
+      duration: 'quarter',
+      tempo: session.tempo,
+      soundStyle: projectRef.current.playbackSound,
+    });
+  }
+
+  function endLiveInput(sourceId: string) {
+    const held = heldLiveInputsRef.current.get(sourceId);
+    const session = recordingSessionRef.current;
+
+    if (!held || !session) {
+      return;
+    }
+
+    heldLiveInputsRef.current.delete(sourceId);
+
+    const millisecondsPerTick = 60_000 / session.tempo / 4;
+    const elapsedBeforeStart = held.startedAt - session.startedAt;
+    const heldMilliseconds = Math.max(1, performance.now() - held.startedAt);
+
+    const startOffsetTicks = snapTicks(
+      elapsedBeforeStart / millisecondsPerTick,
+      session.quantizationTicks,
+    );
+    const durationTicks = Math.max(
+      session.quantizationTicks,
+      snapTicks(
+        heldMilliseconds / millisecondsPerTick,
+        session.quantizationTicks,
+      ),
+    );
+    const startTick = session.baseTick + startOffsetTicks;
+    const endTick = startTick + durationTicks;
+
+    const event: NoteEvent = {
+      id: crypto.randomUUID(),
+      voiceId: held.voiceId,
+      startTick,
+      durationTicks,
+      midi: held.midi,
+    };
+
+    updateProject((current) => ({
+      ...current,
+      measureCount: Math.max(
+        current.measureCount,
+        requiredMeasureCountForTick(endTick),
+      ),
+      events: [
+        ...current.events.filter((existing) => !(
+          existing.voiceId === held.voiceId
+          && existing.startTick === startTick
+        )),
+        event,
+      ],
+    }));
+
+    setSelectedEventId(event.id);
+
+    if (held.voiceId === activeVoiceRef.current && endTick >= cursorRef.current.tick) {
+      setCursorPosition({ tick: endTick }, false);
+    }
   }
 
   const selectedEvent = useMemo(
@@ -233,12 +475,9 @@ export function App() {
   );
 
   function selectEvent(event: NoteEvent) {
-    setSelectedEventId(event.id);
+    activeVoiceRef.current = event.voiceId;
     setActiveVoice(event.voiceId);
-
-    // Kliknutí na notu je výběr pro text a vlastnosti, ne příkaz k přepsání.
-    // Zápis dál pokračuje za poslední notou stejného hlasu.
-    moveCursorToVoiceEnd(event.voiceId);
+    setSelectedEventId(event.id);
   }
 
   function changeLyric(value: string) {
@@ -260,8 +499,37 @@ export function App() {
     updateProject((current) => ({ ...current, title: value }));
   }
 
+  function changeTempo(value: number) {
+    const tempo = Math.max(30, Math.min(300, Math.round(value || 96)));
+    updateProject((current) => ({ ...current, tempo }));
+
+    if (metronomeRef.current.isRunning) {
+      metronomeRef.current.start(tempo, setMetronomeBeat);
+    }
+  }
+
   function changePlaybackSound(soundStyle: SoundStyle) {
     updateProject((current) => ({ ...current, playbackSound: soundStyle }));
+  }
+
+  function changeInputMode(inputMode: InputMode) {
+    inputModeRef.current = inputMode;
+    setInputSettings((current) => ({ ...current, inputMode }));
+  }
+
+  function changeBGriffBaseMidi(bGriffBaseMidi: number) {
+    const normalized = Math.max(24, Math.min(96, Math.round(bGriffBaseMidi)));
+    bGriffBaseRef.current = normalized;
+    setInputSettings((current) => ({ ...current, bGriffBaseMidi: normalized }));
+  }
+
+  function changeEntryMode(mode: EntryMode) {
+    if (mode === 'step' && isRecordingRef.current) {
+      stopLiveRecording();
+    }
+
+    entryModeRef.current = mode;
+    setEntryMode(mode);
   }
 
   function resetProject() {
@@ -270,9 +538,14 @@ export function App() {
     }
 
     playbackRef.current.stop();
-    setProject(createEmptyProject());
+    stopLiveRecording();
+
+    const empty = createEmptyProject();
+    projectRef.current = empty;
+    setProject(empty);
+    activeVoiceRef.current = 's';
     setActiveVoice('s');
-    setCursor({ measure: 0, slot: 0 });
+    setCursorPosition({ tick: 0 }, false);
     setSelectedEventId(null);
     setPlayingEventId(null);
   }
@@ -281,20 +554,12 @@ export function App() {
     readProjectFile(file)
       .then((loaded) => {
         playbackRef.current.stop();
+        stopLiveRecording();
 
-        const firstCursor = getCursorAfterLastVoiceEvent(
-          loaded.events,
-          activeVoice,
-        );
-
-        setProject({
-          ...loaded,
-          measureCount: Math.max(
-            loaded.measureCount,
-            requiredMeasureCount(firstCursor.measure),
-          ),
-        });
-        setCursor(firstCursor);
+        projectRef.current = loaded;
+        setProject(loaded);
+        const position = getCursorAfterLastVoiceEvent(loaded.events, activeVoiceRef.current);
+        setCursorPosition(position);
         setSelectedEventId(null);
         setPlayingEventId(null);
         setStatus('Projekt otevřen');
@@ -304,8 +569,8 @@ export function App() {
 
   function play() {
     playbackRef.current.play(
-      project,
-      project.playbackSound,
+      projectRef.current,
+      projectRef.current.playbackSound,
       setPlayingEventId,
     );
   }
@@ -315,30 +580,28 @@ export function App() {
     setPlayingEventId(null);
   }
 
+  const cursorMeasure = tickToMeasure(cursor.tick) + 1;
+  const cursorBeat = tickToBeatNumber(cursor.tick);
+
   return (
     <div className="app-shell">
       <header className="app-header">
         <div className="brand">Quartet Workspace</div>
 
-        <button type="button" onClick={resetProject}>
-          Nový
-        </button>
-
+        <button type="button" onClick={resetProject}>Nový</button>
         <button
           type="button"
           className="primary"
           onClick={() => {
-            saveProject(project);
+            saveProject(projectRef.current);
             setStatus('Uloženo');
           }}
         >
           Uložit
         </button>
-
-        <button type="button" onClick={() => downloadProject(project)}>
+        <button type="button" onClick={() => downloadProject(projectRef.current)}>
           Export
         </button>
-
         <button type="button" onClick={() => fileInputRef.current?.click()}>
           Otevřít
         </button>
@@ -350,11 +613,9 @@ export function App() {
           accept="application/json,.json,.quartet.json"
           onChange={(event) => {
             const file = event.target.files?.[0];
-
             if (file) {
               importProject(file);
             }
-
             event.currentTarget.value = '';
           }}
         />
@@ -372,10 +633,7 @@ export function App() {
       </header>
 
       <div className="workspace">
-        <VoicePanel
-          activeVoice={activeVoice}
-          onVoiceChange={activateVoice}
-        />
+        <VoicePanel activeVoice={activeVoice} onVoiceChange={activateVoice} />
 
         <main className="editor-main">
           <div className="editor-toolbar title-row">
@@ -395,33 +653,34 @@ export function App() {
                 min="30"
                 max="300"
                 value={project.tempo}
-                onChange={(event) => (
-                  updateProject((current) => ({
-                    ...current,
-                    tempo: Math.max(
-                      30,
-                      Math.min(300, Number(event.target.value) || 96),
-                    ),
-                  }))
-                )}
+                onChange={(event) => changeTempo(Number(event.target.value))}
               />
             </label>
 
-            <span>
-              Kurzor: takt {cursor.measure + 1}, pozice {cursor.slot + 1}
-            </span>
+            <span>Kurzor: takt {cursorMeasure}, doba {cursorBeat}</span>
           </div>
 
           <NotationToolbar
             duration={duration}
             layoutMode={project.layoutMode}
+            viewMode={viewMode}
+            inputMode={inputSettings.inputMode}
+            entryMode={entryMode}
+            quantization={quantization}
+            metronomeRunning={metronomeRunning}
+            isRecording={isRecording}
+            currentBeat={metronomeBeat}
             onDurationChange={setDuration}
-            onLayoutChange={(layoutMode) => (
-              updateProject((current) => ({
-                ...current,
-                layoutMode,
-              }))
-            )}
+            onLayoutChange={(layoutMode) => updateProject((current) => ({
+              ...current,
+              layoutMode,
+            }))}
+            onViewModeChange={setViewMode}
+            onInputModeChange={changeInputMode}
+            onEntryModeChange={changeEntryMode}
+            onQuantizationChange={setQuantization}
+            onToggleMetronome={toggleMetronome}
+            onToggleRecording={startLiveRecording}
           />
 
           <div
@@ -432,15 +691,9 @@ export function App() {
               }
 
               event.preventDefault();
-
-              setZoom((current) => (
-                Math.max(
-                  0.55,
-                  Math.min(
-                    1.85,
-                    current + (event.deltaY < 0 ? 0.1 : -0.1),
-                  ),
-                )
+              setZoom((current) => Math.max(
+                0.55,
+                Math.min(1.85, current + (event.deltaY < 0 ? 0.1 : -0.1)),
               ));
             }}
           >
@@ -448,18 +701,16 @@ export function App() {
               Ctrl + kolečko: {Math.round(zoom * 100)} %
             </div>
 
-            <div
-              className="zoom-stage"
-              style={{ transform: `scale(${zoom})` }}
-            >
+            <div className="zoom-stage" style={{ transform: `scale(${zoom})` }}>
               <ScoreRenderer
                 project={project}
                 activeVoice={activeVoice}
+                viewMode={viewMode}
                 cursor={cursor}
                 selectedEventId={selectedEventId}
                 playingEventId={playingEventId}
                 onSelectEvent={selectEvent}
-                onCursorChange={setInsertionCursor}
+                onCursorChange={setCursorPosition}
               />
             </div>
           </div>
@@ -472,10 +723,9 @@ export function App() {
             <>
               <p>
                 <strong>{selectedEvent.voiceId.toUpperCase()}</strong>
-                {' · '}
-                MIDI {selectedEvent.midi}
+                {' · '}MIDI {selectedEvent.midi}
                 <br />
-                takt {selectedEvent.measure + 1}
+                takt {tickToMeasure(selectedEvent.startTick) + 1}
               </p>
 
               <label>
@@ -494,10 +744,7 @@ export function App() {
                     ...current,
                     events: current.events.map((event) => (
                       event.id === selectedEvent.id
-                        ? {
-                            ...event,
-                            midi: defaultMidiForVoice(event.voiceId),
-                          }
+                        ? { ...event, midi: defaultMidiForVoice(event.voiceId) }
                         : event
                     )),
                   }));
@@ -508,14 +755,27 @@ export function App() {
             </>
           ) : (
             <p className="muted">
-              Klikni do aktivní osnovy pro umístění kurzoru nebo vyber notu
-              pro přidání textu.
+              Klikni do aktivní osnovy pro umístění kurzoru nebo vyber notu pro
+              přidání textu.
             </p>
           )}
 
-          <GriffPanel onInsertNote={insertNote} />
+          <InputPanel
+            inputMode={inputSettings.inputMode}
+            bGriffBaseMidi={inputSettings.bGriffBaseMidi}
+            isLiveRecording={isRecording}
+            onInputModeChange={changeInputMode}
+            onBaseMidiChange={changeBGriffBaseMidi}
+            onInsertStepNote={insertStepNote}
+            onLiveNoteStart={startLiveInput}
+            onLiveNoteEnd={endLiveInput}
+          />
         </aside>
       </div>
     </div>
   );
+}
+
+function snapTicks(value: number, grid: number): number {
+  return Math.round(value / grid) * grid;
 }

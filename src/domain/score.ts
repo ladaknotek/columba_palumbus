@@ -1,31 +1,40 @@
+/**
+ * Hudební jádro je záměrně nezávislé na Reactu i rendereru.
+ * Čas zapisujeme v ticích: 4 ticky = jedna doba, 16 ticků = takt 4/4.
+ * To dovoluje krokový zápis, osminy i pozdější živý záznam bez dalšího
+ * přepisování celého datového modelu.
+ */
 export type VoiceId = 's' | 'a' | 't' | 'b';
 export type LayoutMode = 'two-staves' | 'four-staves';
-export type Duration = 'whole' | 'half' | 'quarter' | 'eighth';
+export type ScoreViewMode = 'score' | 'part';
+export type InputMode = 'letter' | 'bgriff';
+export type EntryMode = 'step' | 'live';
+export type Duration = 'whole' | 'half' | 'quarter' | 'eighth' | 'sixteenth';
+export type RecordQuantization = 'quarter' | 'eighth' | 'sixteenth';
 export type SoundStyle = 'piano' | 'vocal';
 
-/**
- * Aktuální editor používá v každém 4/4 taktu čtyři zapisovací pozice.
- * Později to nahradíme jemnější tickovou mřížkou pro osminy, trioly apod.
- */
-export const SLOTS_PER_MEASURE = 4;
+export const TICKS_PER_BEAT = 4;
+export const BEATS_PER_MEASURE = 4;
+export const TICKS_PER_MEASURE = TICKS_PER_BEAT * BEATS_PER_MEASURE;
 
 export interface CursorPosition {
-  measure: number;
-  slot: number;
+  /** Absolutní pozice od začátku skladby v ticích. */
+  tick: number;
 }
 
 export interface NoteEvent {
   id: string;
   voiceId: VoiceId;
-  measure: number;
-  slot: number;
+  /** Absolutní začátek noty v ticích. */
+  startTick: number;
+  /** Délka noty v ticích. */
+  durationTicks: number;
   midi: number;
-  duration: Duration;
   lyric?: string;
 }
 
 export interface ScoreProject {
-  version: 1;
+  version: 2;
   id: string;
   title: string;
   tempo: number;
@@ -49,7 +58,7 @@ export const VOICES: ReadonlyArray<{
 
 export function createEmptyProject(): ScoreProject {
   return {
-    version: 1,
+    version: 2,
     id: crypto.randomUUID(),
     title: 'Nová skladba',
     tempo: 96,
@@ -65,66 +74,73 @@ export function defaultMidiForVoice(voiceId: VoiceId): number {
   return { s: 72, a: 67, t: 60, b: 52 }[voiceId];
 }
 
-export function durationToBeats(duration: Duration): number {
+export function durationToTicks(duration: Duration): number {
   return {
-    whole: 4,
-    half: 2,
-    quarter: 1,
-    eighth: 0.5,
+    whole: 16,
+    half: 8,
+    quarter: 4,
+    eighth: 2,
+    sixteenth: 1,
   }[duration];
 }
 
-/**
- * Kolik pozic aktuální čtyřdílné mřížky zabere nota.
- * Osmina je zatím dočasně jedna pozice, protože editor dosud neumí
- * polohu „mezi dobami“. To vyřeší budoucí přechod na tickovou mřížku.
- */
-export function durationToSlots(duration: Duration): number {
+export function durationToBeats(duration: Duration): number {
+  return durationToTicks(duration) / TICKS_PER_BEAT;
+}
+
+export function quantizationToTicks(value: RecordQuantization): number {
   return {
-    whole: 4,
-    half: 2,
-    quarter: 1,
-    eighth: 1,
-  }[duration];
+    quarter: 4,
+    eighth: 2,
+    sixteenth: 1,
+  }[value];
 }
 
 export function advanceCursor(
   position: CursorPosition,
   duration: Duration = 'quarter',
 ): CursorPosition {
-  const absoluteSlot =
-    position.measure * SLOTS_PER_MEASURE
-    + position.slot
-    + durationToSlots(duration);
-
-  return {
-    measure: Math.floor(absoluteSlot / SLOTS_PER_MEASURE),
-    slot: absoluteSlot % SLOTS_PER_MEASURE,
-  };
+  return { tick: Math.max(0, position.tick + durationToTicks(duration)) };
 }
 
-/**
- * Vrátí první rozumnou pozici pro další zápis konkrétního hlasu.
- * Hledá skutečný konec noty, ne jen její začátek, takže půlová a celá
- * nota posunou kurzor dál než čtvrťová.
- */
+export function tickToMeasure(tick: number): number {
+  return Math.max(0, Math.floor(tick / TICKS_PER_MEASURE));
+}
+
+export function tickInMeasure(tick: number): number {
+  const normalized = Math.max(0, tick);
+  return normalized % TICKS_PER_MEASURE;
+}
+
+export function tickToBeatNumber(tick: number): number {
+  return Math.floor(tickInMeasure(tick) / TICKS_PER_BEAT) + 1;
+}
+
 export function getCursorAfterLastVoiceEvent(
   events: NoteEvent[],
   voiceId: VoiceId,
 ): CursorPosition {
-  const voiceEvents = events.filter((event) => event.voiceId === voiceId);
+  const lastTick = events
+    .filter((event) => event.voiceId === voiceId)
+    .reduce(
+      (maximum, event) => Math.max(
+        maximum,
+        event.startTick + event.durationTicks,
+      ),
+      0,
+    );
 
-  if (voiceEvents.length === 0) {
-    return { measure: 0, slot: 0 };
-  }
+  return { tick: lastTick };
+}
 
-  return voiceEvents
-    .map((event) => advanceCursor(
-      { measure: event.measure, slot: event.slot },
-      event.duration,
-    ))
-    .sort((left, right) => (
-      left.measure - right.measure || left.slot - right.slot
-    ))
-    .at(-1) ?? { measure: 0, slot: 0 };
+export function measureCountRequiredForTick(tick: number): number {
+  return Math.max(1, Math.floor(Math.max(0, tick) / TICKS_PER_MEASURE) + 1);
+}
+
+export function midiToName(midi: number): string {
+  const names = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'H'];
+  const normalized = Math.max(0, Math.min(127, Math.round(midi)));
+  const octave = Math.floor(normalized / 12) - 1;
+
+  return `${names[normalized % 12]}${octave}`;
 }
