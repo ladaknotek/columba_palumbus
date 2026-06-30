@@ -1,0 +1,69 @@
+/*
+ * Doplňková sazba pro osminy a šestnáctiny.
+ * Držíme ji vedle ScoreRendereru, protože je čistě jeho vizuální detail;
+ * hlavní app.css nemusí kvůli každé nové značce neustále růst.
+ */
+
+.beam-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 4;
+}
+
+.note-beam {
+  position: absolute;
+  height: 4px;
+  background: #171717;
+  transform: translateY(-50%);
+  transform-origin: left center;
+}
+
+.note-beam.beam-level-2 {
+  height: 3px;
+}
+
+/*
+ * U not napojených na trámec přepíšeme pevnou délku nožičky.
+ * CSS proměnné počítá renderer podle konkrétní výšky tónu.
+ */
+.note-glyph.beamed .note-stem {
+  top: var(--beam-stem-top);
+  height: var(--beam-stem-height);
+}
+
+/* Samostatná osmina nebo šestnáctina dostane praporek místo trámce. */
+.note-flag {
+  position: absolute;
+  display: block;
+  width: 9px;
+  height: 13px;
+  box-sizing: border-box;
+  pointer-events: none;
+}
+
+.stem-up .note-flag {
+  left: 12px;
+  top: -20px;
+  border-right: 2px solid #171717;
+  border-bottom: 2px solid #171717;
+  border-radius: 0 0 9px 0;
+  transform: skewY(27deg);
+}
+
+.stem-up .note-flag.flag-2 {
+  top: -14px;
+}
+
+.stem-down .note-flag {
+  left: -5px;
+  top: 26px;
+  border-left: 2px solid #171717;
+  border-top: 2px solid #171717;
+  border-radius: 9px 0 0;
+  transform: skewY(27deg);
+}
+
+.stem-down .note-flag.flag-2 {
+  top: 32px;
+}
