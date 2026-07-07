@@ -4,7 +4,6 @@
  * Držíme ji vedle ScoreRendereru, protože je čistě jeho vizuální detail;
  * hlavní app.css nemusí kvůli každé nové značce neustále růst.
  */
-
 .beam-layer {
   position: absolute;
   inset: 0;
@@ -71,26 +70,50 @@
 
 /*
  * Sjednocení taktových čar s pětilinkovou osnovou.
- *
- * V app.css je pět linek od y=8 px do zhruba y=41 px. Původní taktová
- * čára byla vysoká 52 px a začínala na y=0, takže přečnívala nad i pod
- * osnovu. Všechny svislé taktové čáry proto kreslíme přesně přes stejný
- * interval jako osnova.
+ * V app.css je pět linek od y=8 px do zhruba y=41 px.
  */
 .score-system .measure {
   top: 8px;
   height: 33px;
 }
 
-/* Posuneme číslo taktu zpět do stejné vizuální výšky jako před úpravou. */
+/* Číslo taktu má zůstat nad osnovou. */
 .score-system .measure-number {
   top: -24px;
 }
 
 /*
- * Na konci systému nesmí zůstat běžná border-right i přidaná konečná
- * čára vedle sebe. Kreslíme tedy jednu čistou koncovou čáru přesnou
- * výškou osnovy.
+ * Číslo taktu zobrazujeme jen jednou: nad prvním taktem prvního řádku systému.
+ * Další takty i spodní osnovy stejného SATB systému už čísla nenesou.
+ */
+.score-system .measure ~ .measure .measure-number,
+.score-system .staff-row + .staff-row .measure-number {
+  display: none;
+}
+
+/*
+ * Šířka řádku osnovy je určena explicitně. Díky tomu končí pětilinka přesně
+ * na stejné svislici jako poslední taktová čára a nevznikne na konci mezera.
+ */
+.score-system {
+  margin-inline: auto;
+}
+
+.score-system .staff-row {
+  width: calc(100% - 27px);
+}
+
+.score-system.part-system .staff-row {
+  width: 100%;
+}
+
+.score-system .staff-lines {
+  right: 0;
+}
+
+/*
+ * Na konci systému nesmí zůstat běžná border-right i přidaná konečná čára
+ * vedle sebe. Kreslíme jednu čistou koncovou čáru přesnou výškou osnovy.
  */
 .score-system .system-end-measure {
   border-right: 0;
