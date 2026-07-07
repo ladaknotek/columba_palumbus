@@ -1,5 +1,6 @@
 /*
  * Doplňková sazba pro osminy a šestnáctiny.
+ *
  * Držíme ji vedle ScoreRendereru, protože je čistě jeho vizuální detail;
  * hlavní app.css nemusí kvůli každé nové značce neustále růst.
  */
@@ -66,4 +67,60 @@
 
 .stem-down .note-flag.flag-2 {
   top: 32px;
+}
+
+/*
+ * Sjednocení taktových čar s pětilinkovou osnovou.
+ *
+ * V app.css je pět linek od y=8 px do zhruba y=41 px. Původní taktová
+ * čára byla vysoká 52 px a začínala na y=0, takže přečnívala nad i pod
+ * osnovu. Všechny svislé taktové čáry proto kreslíme přesně přes stejný
+ * interval jako osnova.
+ */
+.score-system .measure {
+  top: 8px;
+  height: 33px;
+}
+
+/* Posuneme číslo taktu zpět do stejné vizuální výšky jako před úpravou. */
+.score-system .measure-number {
+  top: -24px;
+}
+
+/*
+ * Na konci systému nesmí zůstat běžná border-right i přidaná konečná
+ * čára vedle sebe. Kreslíme tedy jednu čistou koncovou čáru přesnou
+ * výškou osnovy.
+ */
+.score-system .system-end-measure {
+  border-right: 0;
+}
+
+.score-system .system-end-bar {
+  top: 0;
+  bottom: 0;
+  right: 0;
+  width: 1.35px;
+  background: #151515;
+  z-index: 2;
+}
+
+/*
+ * Závěrečný systém: tenká + silná čára leží uvnitř šířky osnovy,
+ * nikoli několik pixelů za jejím koncem.
+ */
+.score-system .final-system-measure::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 6px;
+  width: 1px;
+  background: #151515;
+  pointer-events: none;
+}
+
+.score-system .final-system-measure .system-end-bar {
+  right: 0;
+  width: 3px;
 }
