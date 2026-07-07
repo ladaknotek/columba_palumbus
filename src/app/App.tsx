@@ -87,6 +87,7 @@ export function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const playbackRef = useRef(new PlaybackEngine());
   const metronomeRef = useRef(new Metronome());
+  const editorScrollRef = useRef<HTMLDivElement>(null);
 
   // Refs dovolují klávesovým událostem pracovat se zcela aktuálním stavem
   // i při rychlém hraní několika not za sebou mezi dvěma React rendery.
@@ -110,6 +111,45 @@ export function App() {
   useEffect(() => { cursorRef.current = cursor; }, [cursor]);
   useEffect(() => { isRecordingRef.current = isRecording; }, [isRecording]);
 
+
+  /**
+ * Ctrl + kolečko nad partiturou zoomuje pouze notový editor.
+ * Native listener s passive: false dovolí zavolat preventDefault(),
+ * takže Chrome nepřevezme gesto pro zoom celé stránky.
+ */
+  useEffect(() => {
+    const editorElement = editorScrollRef.current;
+
+    if (!editorElement) {
+      return;
+    }
+
+    const handleWheel = (event: WheelEvent) => {
+      if (!event.ctrlKey) {
+        return;
+      }
+
+      event.preventDefault();
+
+      setZoom((current) =>
+        Math.max(
+          0.55,
+          Math.min(
+            1.85,
+            current + (event.deltaY < 0 ? 0.1 : -0.1),
+          ),
+        ),
+      );
+    };
+
+    editorElement.addEventListener('wheel', handleWheel, {
+      passive: false,
+    });
+
+    return () => {
+      editorElement.removeEventListener('wheel', handleWheel);
+    };
+  }, []);
   /** Při načtení existující skladby pokračujeme za poslední sopránovou notou. */
   useEffect(() => {
     moveCursorToVoiceEnd('s');
@@ -683,20 +723,10 @@ export function App() {
             onToggleRecording={startLiveRecording}
           />
 
-          <div
-            className="editor-scroll"
-            onWheel={(event) => {
-              if (!event.ctrlKey) {
-                return;
-              }
-
-              event.preventDefault();
-              setZoom((current) => Math.max(
-                0.55,
-                Math.min(1.85, current + (event.deltaY < 0 ? 0.1 : -0.1)),
-              ));
-            }}
-          >
+            <div
+              ref={editorScrollRef}
+              className="editor-scroll"
+            >
             <div className="zoom-hint">
               Ctrl + kolečko: {Math.round(zoom * 100)} %
             </div>
