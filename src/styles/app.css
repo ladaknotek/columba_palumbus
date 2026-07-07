@@ -357,78 +357,77 @@ button.primary {
 .score-systems {
   display: flex;
   flex-direction: column;
-  gap: 32px;
+  gap: 24px;
 }
 
+/*
+ * Jednotlivé notové systémy mají vždy stejnou šířku A4 sazby. Jejich výška
+ * se ale počítá v rendereru: řádek s textem dostane více místa než čistá
+ * osnova, aby se slabiky nekryly s dalším systémem.
+ */
 .score-system {
   position: relative;
   width: 686px;
-  min-height: 156px;
+  min-height: var(--system-height, 128px);
 }
 
-.score-system.four-staves { min-height: 305px; }
-.score-system.part-system { min-height: 62px; }
 .score-system.part-system .staff-row { margin-left: 0; }
 .score-system.part-system .part-voice-label { display: block; }
 
 .system-bracket {
   position: absolute;
   left: 0;
-  top: 29px;
+  top: 23px;
   width: 18px;
-  height: 102px;
+  height: var(--bracket-height, 100px);
   border-left: 3px solid #1b1b1b;
   border-top: 3px solid #1b1b1b;
   border-bottom: 3px solid #1b1b1b;
   border-radius: 10px 0 0 10px;
 }
 
-.four-staves .system-bracket { height: 253px; }
-
 .system-connector {
   position: absolute;
   left: 18px;
-  top: 28px;
-  height: 103px;
+  top: 22px;
+  height: var(--bracket-height, 100px);
   border-left: 1.5px solid #111;
 }
 
-.four-staves .system-connector { height: 254px; }
-
 .staff-row {
   position: relative;
-  height: 62px;
+  height: var(--staff-row-height, 56px);
   margin-left: 27px;
 }
 
-.staff-row + .staff-row { margin-top: 22px; }
+.staff-row + .staff-row { margin-top: 16px; }
 
 .staff-lines {
   position: absolute;
   left: 0;
   right: 0;
-  top: 9px;
-  height: 34px;
+  top: 8px;
+  height: 33px;
 }
 
 .staff-lines span {
   display: block;
-  height: 1.4px;
+  height: 1.35px;
   background: #202020;
-  margin-bottom: 7px;
+  margin-bottom: 6.6px;
 }
 
 .clef {
   position: absolute;
   left: 5px;
-  top: -7px;
+  top: -6px;
   z-index: 1;
-  font: 55px/1 Georgia, serif;
+  font: 52px/1 Georgia, serif;
 }
 
 .bass-clef {
-  font-size: 48px;
-  top: 0;
+  font-size: 46px;
+  top: 1px;
 }
 
 .part-voice-label {
@@ -443,8 +442,7 @@ button.primary {
 .measure {
   position: absolute;
   top: 0;
-  width: 145px;
-  height: 54px;
+  height: 52px;
   border-right: 1px solid #151515;
 }
 
@@ -452,7 +450,7 @@ button.primary {
 
 .measure-number {
   position: absolute;
-  top: -17px;
+  top: -16px;
   left: 4px;
   font-size: 10px;
   color: #7a8594;
@@ -512,6 +510,10 @@ button.primary {
   outline: 4px solid #ffd0b8;
 }
 
+/*
+ * Text zůstává pod příslušnou notou. Samotná šířka taktů se vypočítá v
+ * ScoreRendereru podle délky slabik, proto se krátká i delší slova lépe vejdou.
+ */
 .lyric {
   position: absolute;
   top: 38px;
@@ -519,6 +521,7 @@ button.primary {
   transform: translateX(-50%);
   white-space: nowrap;
   font: 15px Georgia, serif;
+  line-height: 1.2;
 }
 
 .measure.cursor-target { cursor: crosshair; }
@@ -538,7 +541,7 @@ button.primary {
 .score-cursor {
   position: absolute;
   top: 4px;
-  height: 50px;
+  height: 48px;
   border-left: 2px solid #2d6cdf;
   box-shadow: 0 0 0 1px rgb(255 255 255 / 75%);
   pointer-events: none;
