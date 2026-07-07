@@ -1,4 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  type KeyboardEvent as ReactKeyboardEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 
 import {
   advanceCursor,
@@ -85,6 +91,7 @@ export function App() {
   const [isRecording, setIsRecording] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const lyricInputRef = useRef<HTMLInputElement>(null);
   const playbackRef = useRef(new PlaybackEngine());
   const metronomeRef = useRef(new Metronome());
   const editorScrollRef = useRef<HTMLDivElement>(null);
@@ -111,12 +118,10 @@ export function App() {
   useEffect(() => { cursorRef.current = cursor; }, [cursor]);
   useEffect(() => { isRecordingRef.current = isRecording; }, [isRecording]);
 
-
   /**
- * Ctrl + kolečko nad partiturou zoomuje pouze notový editor.
- * Native listener s passive: false dovolí zavolat preventDefault(),
- * takže Chrome nepřevezme gesto pro zoom celé stránky.
- */
+   * Ctrl + kolečko zachytíme nativním nepasivním listenerem přímo na ploše
+   * partitury. Chrome pak nezvětší celou stránku, pouze notový editor.
+   */
   useEffect(() => {
     const editorElement = editorScrollRef.current;
 
@@ -130,26 +135,16 @@ export function App() {
       }
 
       event.preventDefault();
-
-      setZoom((current) =>
-        Math.max(
-          0.55,
-          Math.min(
-            1.85,
-            current + (event.deltaY < 0 ? 0.1 : -0.1),
-          ),
-        ),
-      );
+      setZoom((current) => Math.max(
+        0.55,
+        Math.min(1.85, current + (event.deltaY < 0 ? 0.1 : -0.1)),
+      ));
     };
 
-    editorElement.addEventListener('wheel', handleWheel, {
-      passive: false,
-    });
-
-    return () => {
-      editorElement.removeEventListener('wheel', handleWheel);
-    };
+    editorElement.addEventListener('wheel', handleWheel, { passive: false });
+    return () => editorElement.removeEventListener('wheel', handleWheel);
   }, []);
+
   /** Při načtení existující skladby pokračujeme za poslední sopránovou notou. */
   useEffect(() => {
     moveCursorToVoiceEnd('s');
@@ -535,6 +530,65 @@ export function App() {
     }));
   }
 
+  /**
+   * Psaní textu písně je po slabikách: mezerník uloží slabiku a přeskočí
+   * na další notu stejného hlasu; pomlčka navíc uloží spojení mezi slabikami.
+   */
+  function commitLyricAndMove(connector?: 'hyphen') {
+    const current = projectRef.current.events.find(
+      (event) => event.id === selectedEventId,
+    );
+
+    if (!current) {
+      return;
+    }
+
+    const next = projectRef.current.events
+      .filter((event) => (
+        event.voiceId === current.voiceId
+        && event.startTick > current.startTick
+      ))
+      .sort((left, right) => left.startTick - right.startTick)
+      .at(0);
+
+    updateProject((project) => ({
+      ...project,
+      events: project.events.map((event) => (
+        event.id === current.id
+          ? {
+            ...event,
+            lyric: event.lyric?.trim() || undefined,
+            lyricConnector: connector,
+          }
+          : event
+      )),
+    }));
+
+    if (!next) {
+      setStatus('V tomto hlase už není další nota pro text.');
+      return;
+    }
+
+    setSelectedEventId(next.id);
+    activeVoiceRef.current = next.voiceId;
+    setActiveVoice(next.voiceId);
+
+    window.setTimeout(() => lyricInputRef.current?.focus(), 0);
+  }
+
+  function handleLyricKeyDown(event: ReactKeyboardEvent<HTMLInputElement>) {
+    if (event.key === ' ') {
+      event.preventDefault();
+      commitLyricAndMove();
+      return;
+    }
+
+    if (event.key === '-') {
+      event.preventDefault();
+      commitLyricAndMove('hyphen');
+    }
+  }
+
   function changeTitle(value: string) {
     updateProject((current) => ({ ...current, title: value }));
   }
@@ -723,10 +777,7 @@ export function App() {
             onToggleRecording={startLiveRecording}
           />
 
-            <div
-              ref={editorScrollRef}
-              className="editor-scroll"
-            >
+          <div ref={editorScrollRef} className="editor-scroll">
             <div className="zoom-hint">
               Ctrl + kolečko: {Math.round(zoom * 100)} %
             </div>
@@ -760,12 +811,20 @@ export function App() {
 
               <label>
                 Text / slabika
-                <textarea
+                <input
+                  ref={lyricInputRef}
+                  className="lyric-entry"
                   value={selectedEvent.lyric ?? ''}
                   onChange={(event) => changeLyric(event.target.value)}
-                  placeholder="např. A-"
+                  onKeyDown={handleLyricKeyDown}
+                  placeholder="např. ko"
                 />
               </label>
+
+              <p className="lyric-entry-hint">
+                Mezerník uloží slabiku a přesune se na další notu. Pomlčka
+                přidá spojení mezi slabikami a také přejde dál.
+              </p>
 
               <button
                 type="button"

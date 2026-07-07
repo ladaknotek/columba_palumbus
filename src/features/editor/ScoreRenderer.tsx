@@ -46,8 +46,13 @@ const NOTE_LEFT_PADDING = 11;
 const PAGE_SYSTEMS_HEIGHT = 900;
 const SYSTEM_GAP = 24;
 const NORMAL_STAFF_HEIGHT = 56;
-const LYRIC_STAFF_HEIGHT = 80;
+const LYRIC_LINE_HEIGHT = 20;
 const STAFF_GAP = 16;
+const STAFF_LINE_TOP = 8.7;
+const STAFF_LINE_GAP = 7.95;
+const STAFF_STEP = STAFF_LINE_GAP / 2;
+const TREBLE_C4_Y = STAFF_LINE_TOP + STAFF_LINE_GAP * 5;
+const BASS_C3_Y = STAFF_LINE_TOP + STAFF_LINE_GAP * 2.5;
 
 type StemDirection = 'up' | 'down';
 
@@ -57,6 +62,7 @@ interface PositionedNote {
   left: number;
   top: number;
   direction: StemDirection;
+  accidental?: '♯' | '♭';
 }
 
 interface BeamAttachment {
@@ -145,6 +151,7 @@ export function ScoreRenderer({
                 playingEventId={playingEventId}
                 rowVoiceGroups={rowVoiceGroups}
                 plan={plan}
+                isFinalSystem={plan.measures.at(-1) === renderMeasureCount - 1}
                 onSelectEvent={onSelectEvent}
                 onCursorChange={onCursorChange}
               />
@@ -167,11 +174,13 @@ function ScoreSystem({
   playingEventId,
   rowVoiceGroups,
   plan,
+  isFinalSystem,
   onSelectEvent,
   onCursorChange,
 }: Props & {
   rowVoiceGroups: VoiceId[][];
   plan: SystemPlan;
+  isFinalSystem: boolean;
 }) {
   const startMeasure = plan.measures[0];
   const endMeasureExclusive = plan.measures.at(-1)! + 1;
@@ -199,7 +208,8 @@ function ScoreSystem({
       {rowVoiceGroups.map((voiceIds, rowIndex) => {
         const isActiveStaff = voiceIds.includes(activeVoice);
         const staffVoice = voiceIds[0];
-        const isBassStaff = clefForVoice(staffVoice) === 'bass';
+        const isTenorStaff = staffVoice === 't';
+        const isBassStaff = clefForVoice(staffVoice) === 'bass' && !isTenorStaff;
         const cursorIsInThisSystem = isActiveStaff
           && cursor.tick >= startTick
           && cursor.tick < endTick;
@@ -212,7 +222,8 @@ function ScoreSystem({
           plan.measureWidths,
         );
         const beamLayout = createBeamLayout(notes);
-        const hasLyrics = notes.some((note) => Boolean(note.event.lyric?.trim()));
+        const lyricLines = getLyricLines(notes, voiceIds);
+        const hasLyrics = lyricLines.length > 0;
         const staffStyle = {
           '--staff-row-height': `${plan.rowHeights[rowIndex]}px`,
         } as CSSProperties;
@@ -227,6 +238,7 @@ function ScoreSystem({
 
             <div className={`clef ${isBassStaff ? 'bass-clef' : ''}`}>
               {isBassStaff ? '𝄢' : '𝄞'}
+              {isTenorStaff && <span className="tenor-octave">8</span>}
             </div>
 
             {viewMode === 'part' && (
@@ -241,6 +253,8 @@ function ScoreSystem({
                 measureWidth={plan.measureWidths[localIndex]}
                 measureWidths={plan.measureWidths}
                 isActiveStaff={isActiveStaff}
+                isSystemEnd={localIndex === plan.measures.length - 1}
+                isFinalSystem={isFinalSystem}
                 onCursorChange={onCursorChange}
               />
             ))}
@@ -258,9 +272,12 @@ function ScoreSystem({
                 selected={note.event.id === selectedEventId}
                 playing={note.event.id === playingEventId}
                 activeVoice={note.voiceId === activeVoice}
+                accidental={note.accidental}
                 onClick={() => onSelectEvent(note.event)}
               />
             ))}
+
+            <LyricLayer lines={lyricLines} />
 
             {cursorIsInThisSystem && (
               <div
@@ -368,94 +385,41 @@ function buildSystemPlans(
 function getMeasureMinimumWidth(
   project: ScoreProject,
   measure: number,
-  rowVoiceGroups: VoiceId[][],
+  _rowVoiceGroups: VoiceId[][],
 ): number {
   const measureStart = measure * TICKS_PER_MEASURE;
   const measureEnd = measureStart + TICKS_PER_MEASURE;
   const events = project.events
-    .filter((event) => (
-      event.startTick >= measureStart && event.startTick < measureEnd
-    ));
+    .filter((event) => event.startTick >= measureStart && event.startTick < measureEnd)
+    .sort((left, right) => left.startTick - right.startTick);
 
+  // Prázdný systém má deset rovnoměrných taktů. U hustého rytmu se šířka
+  // určuje z počtu skutečných časových pozic, ne plošným roztahováním kvůli
+  // textu. Text pak dorovnává jen sousední noty v getPositionedNotes().
   let required = MEASURE_AREA_WIDTH / DEFAULT_MEASURES_PER_SYSTEM;
-  const shortestDuration = events.reduce(
-    (shortest, event) => Math.min(shortest, event.durationTicks),
+  const ticks = [...new Set(events.map((event) => event.startTick))];
+  const shortest = events.reduce(
+    (minimum, event) => Math.min(minimum, event.durationTicks),
     Number.POSITIVE_INFINITY,
   );
 
-  if (events.length >= 4) {
-    required = Math.max(required, 76);
+  if (ticks.length >= 2) {
+    const minimumGap = shortest <= 1 ? 14 : shortest <= 2 ? 18 : 24;
+    required = Math.max(required, NOTE_LEFT_PADDING * 2 + (ticks.length - 1) * minimumGap);
   }
 
-  if (events.length >= 6 || shortestDuration <= 1) {
-    required = Math.max(required, 94);
+  if (shortest <= 1) {
+    required = Math.max(required, 132);
+  } else if (shortest <= 2) {
+    required = Math.max(required, 104);
+  } else if (events.length >= 4) {
+    required = Math.max(required, 82);
   }
 
-  if (events.length >= 8) {
-    required = Math.max(required, 112);
-  }
-
-  for (const voiceIds of rowVoiceGroups) {
-    for (const voiceId of voiceIds) {
-      const lyricNotes = events
-        .filter((event) => event.voiceId === voiceId && event.lyric?.trim())
-        .sort((left, right) => left.startTick - right.startTick);
-
-      required = Math.max(
-        required,
-        getLyricDrivenMeasureWidth(lyricNotes, measureStart),
-      );
-    }
-  }
-
-  // Jediný takt nesmí systém rozbít. Velmi dlouhé texty se zatím ponechají
-  // jako přesah do sousedního prostoru; později sem lze přidat dělení slov.
-  return Math.min(240, Math.ceil(required));
+  return Math.min(280, Math.ceil(required));
 }
 
-function getLyricDrivenMeasureWidth(
-  notes: NoteEvent[],
-  measureStart: number,
-): number {
-  if (notes.length < 2) {
-    return 0;
-  }
 
-  let required = 0;
-
-  for (let index = 1; index < notes.length; index += 1) {
-    const previous = notes[index - 1];
-    const current = notes[index];
-    const tickDistance = current.startTick - previous.startTick;
-
-    if (tickDistance <= 0) {
-      continue;
-    }
-
-    const previousWidth = estimateLyricWidth(previous.lyric ?? '');
-    const currentWidth = estimateLyricWidth(current.lyric ?? '');
-    const desiredDistance = (previousWidth + currentWidth) / 2 + 7;
-
-    required = Math.max(
-      required,
-      desiredDistance * TICKS_PER_MEASURE / tickDistance,
-    );
-  }
-
-  // První a poslední slabika mohou mírně přesahovat taktovou čáru, ale u
-  // delšího textu dáme taktu přirozené minimum.
-  const longest = Math.max(
-    ...notes.map((note) => estimateLyricWidth(note.lyric ?? '')),
-  );
-  const firstOffset = notes[0].startTick - measureStart;
-  const lastOffset = notes.at(-1)!.startTick - measureStart;
-
-  if (firstOffset > 0 && lastOffset < TICKS_PER_MEASURE) {
-    required = Math.max(required, longest + 20);
-  }
-
-  return required;
-}
 
 function estimateLyricWidth(text: string): number {
   return Array.from(text).reduce((width, character) => {
@@ -497,16 +461,17 @@ function getRowHeights(
   const endTick = endMeasureExclusive * TICKS_PER_MEASURE;
 
   return rowVoiceGroups.map((voiceIds) => {
-    const hasLyrics = project.events.some((event) => (
-      voiceIds.includes(event.voiceId)
+    const lyricVoiceCount = voiceIds.filter((voiceId) => project.events.some((event) => (
+      event.voiceId === voiceId
       && event.startTick >= startTick
       && event.startTick < endTick
       && Boolean(event.lyric?.trim())
-    ));
+    ))).length;
 
-    return hasLyrics ? LYRIC_STAFF_HEIGHT : NORMAL_STAFF_HEIGHT;
+    return NORMAL_STAFF_HEIGHT + lyricVoiceCount * LYRIC_LINE_HEIGHT;
   });
 }
+
 
 function getSystemHeight(rowHeights: number[]): number {
   return rowHeights.reduce((sum, height) => sum + height, 0)
@@ -547,21 +512,140 @@ function getPositionedNotes(
   endTick: number,
   measureWidths: number[],
 ): PositionedNote[] {
-  return voiceIds.flatMap((voiceId) => (
-    events
+  return voiceIds.flatMap((voiceId) => {
+    const voiceEvents = events
       .filter((event) => (
         event.voiceId === voiceId
         && event.startTick >= startTick
         && event.startTick < endTick
       ))
-      .map((event) => ({
+      .sort((left, right) => left.startTick - right.startTick);
+
+    let previous: PositionedNote | null = null;
+
+    return voiceEvents.map((event) => {
+      const baseLeft = getTickLeft(event.startTick - startTick, measureWidths);
+      const accidental = accidentalForMidi(event.midi);
+      const positioned: PositionedNote = {
         event,
         voiceId,
-        left: getTickLeft(event.startTick - startTick, measureWidths),
+        left: baseLeft,
         top: pitchToTop(event.midi, voiceId),
         direction: stemDirectionForVoice(voiceId),
-      }))
-  ));
+        accidental,
+      };
+
+      if (previous && tickToMeasure(previous.event.startTick) === tickToMeasure(event.startTick)) {
+        const rhythmGap = minimumRhythmGap(previous.event, event);
+        const lyricGap = requiredLyricGap(previous.event, event);
+        positioned.left = Math.max(
+          baseLeft,
+          previous.left + Math.max(rhythmGap, lyricGap),
+        );
+      }
+
+      previous = positioned;
+      return positioned;
+    });
+  });
+}
+
+
+interface LyricLine {
+  event: NoteEvent;
+  left: number;
+  top: number;
+  hyphenLeft?: number;
+}
+
+function getLyricLines(notes: PositionedNote[], voiceIds: VoiceId[]): LyricLine[] {
+  const lines: LyricLine[] = [];
+
+  for (const voiceId of voiceIds) {
+    const voiceNotes = notes
+      .filter((note) => note.voiceId === voiceId && note.event.lyric?.trim())
+      .sort((left, right) => left.event.startTick - right.event.startTick);
+    const lane = voiceIds.indexOf(voiceId);
+    const top = 55 + lane * LYRIC_LINE_HEIGHT;
+
+    for (let index = 0; index < voiceNotes.length; index += 1) {
+      const current = voiceNotes[index];
+      const next = voiceNotes[index + 1];
+      const hasHyphen = current.event.lyricConnector === 'hyphen' && next;
+
+      lines.push({
+        event: current.event,
+        left: current.left,
+        top,
+        hyphenLeft: hasHyphen
+          ? current.left
+            + estimateLyricWidth(current.event.lyric ?? '') / 2
+            + Math.max(5, (next.left - current.left - estimateLyricWidth(current.event.lyric ?? '') / 2 - estimateLyricWidth(next.event.lyric ?? '') / 2) / 2)
+          : undefined,
+      });
+    }
+  }
+
+  return lines;
+}
+
+function LyricLayer({ lines }: { lines: LyricLine[] }) {
+  return (
+    <div className="lyric-layer" aria-label="Text písně">
+      {lines.map((line) => (
+        <span
+          className="lyric-syllable"
+          key={line.event.id}
+          style={{ left: line.left, top: line.top }}
+        >
+          {line.event.lyric}
+          {line.hyphenLeft !== undefined && (
+            <span className="lyric-hyphen" style={{ left: line.hyphenLeft - line.left }}>‐</span>
+          )}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function minimumRhythmGap(previous: NoteEvent, current: NoteEvent): number {
+  const shortest = Math.min(previous.durationTicks, current.durationTicks);
+  if (shortest <= 1) {
+    return 14;
+  }
+  if (shortest <= 2) {
+    return 18;
+  }
+  return 22;
+}
+
+function requiredLyricGap(previous: NoteEvent, current: NoteEvent): number {
+  if (!previous.lyric?.trim() || !current.lyric?.trim()) {
+    return 0;
+  }
+
+  const connectorGap = previous.lyricConnector === 'hyphen' ? 11 : 8;
+  return (estimateLyricWidth(previous.lyric) + estimateLyricWidth(current.lyric)) / 2 + connectorGap;
+}
+
+function accidentalForMidi(midi: number): '♯' | '♭' | undefined {
+  // Data zatím neobsahují tóninu ani enharmonické pojmenování. Tento výchozí
+  // zápis používá v češtině přirozenou směs: cis/fis/gis a es/b.
+  const pitchClass = ((midi % 12) + 12) % 12;
+  return ({
+    1: '♯',
+    3: '♭',
+    6: '♯',
+    8: '♯',
+    10: '♭',
+  } as Partial<Record<number, '♯' | '♭'>>)[pitchClass];
+}
+
+function diatonicStepForMidi(midi: number): number {
+  const pitchClass = ((midi % 12) + 12) % 12;
+  const octave = Math.floor(midi / 12) - 1;
+  const letterStep = [0, 0, 1, 2, 2, 3, 3, 4, 4, 5, 6, 6][pitchClass];
+  return octave * 7 + letterStep;
 }
 
 function createBeamLayout(notes: PositionedNote[]): BeamLayout {
@@ -784,6 +868,8 @@ function MeasureTarget({
   measureWidth,
   measureWidths,
   isActiveStaff,
+  isSystemEnd,
+  isFinalSystem,
   onCursorChange,
 }: {
   measure: number;
@@ -791,6 +877,8 @@ function MeasureTarget({
   measureWidth: number;
   measureWidths: number[];
   isActiveStaff: boolean;
+  isSystemEnd: boolean;
+  isFinalSystem: boolean;
   onCursorChange: (position: CursorPosition) => void;
 }) {
   function handleClick(event: MouseEvent<HTMLDivElement>) {
@@ -814,27 +902,30 @@ function MeasureTarget({
       ),
     );
 
-    onCursorChange({
-      tick: measure * TICKS_PER_MEASURE + tickOffset,
-    });
+    onCursorChange({ tick: measure * TICKS_PER_MEASURE + tickOffset });
   }
 
   return (
     <div
-      className={`measure ${isActiveStaff ? 'cursor-target' : ''}`}
+      className={[
+        'measure',
+        isActiveStaff ? 'cursor-target' : '',
+        isSystemEnd ? 'system-end-measure' : '',
+        isSystemEnd && isFinalSystem ? 'final-system-measure' : '',
+      ].filter(Boolean).join(' ')}
       style={{
         left: getMeasureLeft(localIndex, measureWidths),
         width: measureWidth,
       }}
       onClick={isActiveStaff ? handleClick : undefined}
-      title={isActiveStaff
-        ? 'Kliknutím nastavíš místo dalšího zápisu.'
-        : undefined}
+      title={isActiveStaff ? 'Kliknutím nastavíš místo dalšího zápisu.' : undefined}
     >
       <span className="measure-number">{measure + 1}</span>
+      {isSystemEnd && <span className="system-end-bar" aria-hidden="true" />}
     </div>
   );
 }
+
 
 function FiveLineStaff() {
   return (
@@ -853,6 +944,7 @@ function NoteGlyph({
   selected,
   playing,
   activeVoice,
+  accidental,
   onClick,
 }: {
   event: NoteEvent;
@@ -863,6 +955,7 @@ function NoteGlyph({
   selected: boolean;
   playing: boolean;
   activeVoice: boolean;
+  accidental: '♯' | '♭' | undefined;
   onClick: () => void;
 }) {
   const down = voiceId === 'a' || voiceId === 'b';
@@ -901,15 +994,16 @@ function NoteGlyph({
       }}
       title={`MIDI ${event.midi}`}
     >
+      {accidental && <span className="note-accidental">{accidental}</span>}
       <span className="note-head" />
       {!stemless && <span className="note-stem" />}
       {Array.from({ length: flagCount }, (_, index) => (
         <span className={`note-flag flag-${index + 1}`} key={index} />
       ))}
-      {event.lyric && <span className="lyric">{event.lyric}</span>}
     </button>
   );
 }
+
 
 function getMeasureLeft(localMeasureIndex: number, measureWidths: number[]): number {
   return STAFF_CONTENT_LEFT
@@ -932,15 +1026,13 @@ function getTickLeft(relativeTick: number, measureWidths: number[]): number {
 }
 
 function pitchToTop(midi: number, voiceId: VoiceId): number {
-  const bases: Record<VoiceId, number> = {
-    s: 49,
-    a: 50,
-    t: 51,
-    b: 51,
-  };
-
-  return bases[voiceId] - (midi - 60) * 2.1;
+  const isBass = voiceId === 'b';
+  const referenceMidi = isBass ? 48 : 60; // C3 pro basovou, C4 pro houslovou osnovu
+  const referenceY = isBass ? BASS_C3_Y : TREBLE_C4_Y;
+  const staffSteps = diatonicStepForMidi(midi) - diatonicStepForMidi(referenceMidi);
+  return referenceY - staffSteps * STAFF_STEP;
 }
+
 
 function stemDirectionForVoice(voiceId: VoiceId): StemDirection {
   return voiceId === 'a' || voiceId === 'b' ? 'down' : 'up';

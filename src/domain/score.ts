@@ -31,6 +31,8 @@ export interface NoteEvent {
   durationTicks: number;
   midi: number;
   lyric?: string;
+  /** Pomlčka mezi touto a následující slabikou v textu písně. */
+  lyricConnector?: 'hyphen';
 }
 
 export interface ScoreProject {

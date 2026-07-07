@@ -430,6 +430,13 @@ button.primary {
   top: 1px;
 }
 
+.tenor-octave {
+  position: absolute;
+  left: 16px;
+  top: 38px;
+  font: 11px/1 Georgia, serif;
+}
+
 .part-voice-label {
   display: none;
   position: absolute;
@@ -511,17 +518,58 @@ button.primary {
 }
 
 /*
- * Text zůstává pod příslušnou notou. Samotná šířka taktů se vypočítá v
- * ScoreRendereru podle délky slabik, proto se krátká i delší slova lépe vejdou.
+ * Text má samostatnou pevnou vrstvu pod osnovou. Už není součástí hlavičky
+ * noty, takže melodie nemůže posouvat slabiky nahoru a dolů.
  */
-.lyric {
+.lyric-layer {
   position: absolute;
-  top: 38px;
-  left: 50%;
+  inset: 0;
+  pointer-events: none;
+  z-index: 7;
+}
+
+.lyric-syllable {
+  position: absolute;
   transform: translateX(-50%);
   white-space: nowrap;
-  font: 15px Georgia, serif;
-  line-height: 1.2;
+  font: 15px/1.2 Georgia, serif;
+}
+
+.lyric-hyphen {
+  position: absolute;
+  transform: translateX(-50%);
+  font: inherit;
+}
+
+.lyric-entry-hint {
+  margin: 7px 0 0;
+  color: #647184;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.note-accidental {
+  position: absolute;
+  left: -9px;
+  top: 0;
+  color: #171717;
+  font: 18px/1 Georgia, serif;
+}
+
+/* Běžný konec systému; poslední systém skladby má navíc silnou závěrečnou čáru. */
+.system-end-measure { border-right-width: 1.35px; }
+.system-end-bar {
+  position: absolute;
+  top: 8px;
+  bottom: 11px;
+  right: -1px;
+  width: 1px;
+  background: #151515;
+}
+
+.final-system-measure .system-end-bar {
+  right: -4px;
+  width: 3px;
 }
 
 .measure.cursor-target { cursor: crosshair; }
