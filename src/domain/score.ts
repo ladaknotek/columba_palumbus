@@ -22,6 +22,14 @@ export interface CursorPosition {
   tick: number;
 }
 
+export interface LyricSyllable {
+  /** Číslo sloky; první sloka má hodnotu 1. */
+  verse: number;
+  text: string;
+  /** Pomlčka mezi touto a následující slabikou stejné sloky. */
+  connector?: 'hyphen';
+}
+
 export interface NoteEvent {
   id: string;
   voiceId: VoiceId;
@@ -30,9 +38,14 @@ export interface NoteEvent {
   /** Délka noty v ticích. */
   durationTicks: number;
   midi: number;
+
+  /** Starší jednoduchý text první sloky. Zůstává kvůli kompatibilitě. */
   lyric?: string;
-  /** Pomlčka mezi touto a následující slabikou v textu písně. */
+  /** Starší pomlčka pro jednoduchý text první sloky. */
   lyricConnector?: 'hyphen';
+
+  /** Připraveno pro více slok pod sebou. UI na editaci více slok doplníme zvlášť. */
+  lyrics?: LyricSyllable[];
 }
 
 export interface ScoreProject {

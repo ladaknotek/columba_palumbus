@@ -1,8 +1,7 @@
 /*
- * Doplňková sazba pro osminy a šestnáctiny.
- *
- * Držíme ji vedle ScoreRendereru, protože je čistě jeho vizuální detail;
- * hlavní app.css nemusí kvůli každé nové značce neustále růst.
+ * Vizuální vrstva notového rendereru.
+ * Geometrii taktů, not a textů počítá scoreLayoutEngine.ts.
+ * CSS zde pouze kreslí hotový plán.
  */
 .beam-layer {
   position: absolute;
@@ -19,20 +18,13 @@
   transform-origin: left center;
 }
 
-.note-beam.beam-level-2 {
-  height: 3px;
-}
+.note-beam.beam-level-2 { height: 3px; }
 
-/*
- * U not napojených na trámec přepíšeme pevnou délku nožičky.
- * CSS proměnné počítá renderer podle konkrétní výšky tónu.
- */
 .note-glyph.beamed .note-stem {
   top: var(--beam-stem-top);
   height: var(--beam-stem-height);
 }
 
-/* Samostatná osmina nebo šestnáctina dostane praporek místo trámce. */
 .note-flag {
   position: absolute;
   display: block;
@@ -51,9 +43,7 @@
   transform: skewY(27deg);
 }
 
-.stem-up .note-flag.flag-2 {
-  top: -14px;
-}
+.stem-up .note-flag.flag-2 { top: -14px; }
 
 .stem-down .note-flag {
   left: -5px;
@@ -64,60 +54,48 @@
   transform: skewY(27deg);
 }
 
-.stem-down .note-flag.flag-2 {
-  top: 32px;
+.stem-down .note-flag.flag-2 { top: 32px; }
+
+.score-system {
+  margin-inline: auto;
 }
 
-/*
- * Sjednocení taktových čar s pětilinkovou osnovou.
- * V app.css je pět linek od y=8 px do zhruba y=41 px.
- */
+.score-system .staff-row,
+.score-system.part-system .staff-row {
+  margin-left: 27px;
+  width: calc(100% - 27px);
+}
+
 .score-system .measure {
   top: 8px;
   height: 33px;
 }
 
-/* Číslo taktu má zůstat nad osnovou. */
 .score-system .measure-number {
   top: -24px;
 }
 
-/*
- * Číslo taktu zobrazujeme jen jednou: nad prvním taktem prvního řádku systému.
- * Další takty i spodní osnovy stejného SATB systému už čísla nenesou.
- */
 .score-system .measure ~ .measure .measure-number,
 .score-system .staff-row + .staff-row .measure-number {
   display: none;
 }
 
-/*
- * Šířka řádku osnovy je určena explicitně. Díky tomu končí pětilinka přesně
- * na stejné svislici jako poslední taktová čára a nevznikne na konci mezera.
- */
-.score-system {
-  margin-inline: auto;
-}
-
-.score-system .staff-row {
-  width: calc(100% - 27px);
-}
-
-.score-system.part-system .staff-row {
-  width: 100%;
-}
-
 .score-system .staff-lines {
+  left: 0;
   right: 0;
 }
 
-/*
- * Na konci systému nesmí zůstat běžná border-right i přidaná konečná čára
- * vedle sebe. Kreslíme jednu čistou koncovou čáru přesnou výškou osnovy.
- */
-.score-system .system-end-measure {
-  border-right: 0;
+.score-system .staff-lines span {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: block;
+  height: 1.35px;
+  margin: 0;
+  background: #202020;
 }
+
+.score-system .system-end-measure { border-right: 0; }
 
 .score-system .system-end-bar {
   top: 0;
@@ -128,10 +106,6 @@
   z-index: 2;
 }
 
-/*
- * Závěrečný systém: tenká + silná čára leží uvnitř šířky osnovy,
- * nikoli několik pixelů za jejím koncem.
- */
 .score-system .final-system-measure::after {
   content: '';
   position: absolute;
@@ -146,4 +120,34 @@
 .score-system .final-system-measure .system-end-bar {
   right: 0;
   width: 3px;
+}
+
+.ledger-line {
+  position: absolute;
+  left: -3px;
+  width: 24px;
+  height: 1.35px;
+  background: #202020;
+  pointer-events: none;
+  z-index: -1;
+}
+
+.lyric-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 7;
+}
+
+.lyric-syllable {
+  position: absolute;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  font: 15px/1.2 Georgia, serif;
+}
+
+.lyric-hyphen {
+  position: absolute;
+  transform: translateX(-50%);
+  font: inherit;
 }

@@ -10,10 +10,23 @@ import type {
 import {
   TICKS_PER_BEAT,
   TICKS_PER_MEASURE,
-  VOICES,
   tickInMeasure,
   tickToMeasure,
 } from '../../domain/score';
+import {
+  STAFF_LINE_GAP,
+  STAFF_LINE_TOP,
+  voiceName,
+} from './scoreGeometry';
+import {
+  buildScoreLayout,
+  cursorFromMeasureClick,
+  leftForCursorTick,
+  type LyricLineLayout,
+  type MeasureLayoutPlan,
+  type PositionedNote,
+  type SystemLayoutPlan,
+} from './scoreLayoutEngine';
 import './noteBeaming.css';
 
 interface Props {
@@ -27,47 +40,6 @@ interface Props {
   onCursorChange: (position: CursorPosition) => void;
 }
 
-/**
- * Výchozí délka systému. Sazba ji může podle hustoty not a textu zkrátit,
- * nikdy ji ale neprodlouží nad deset taktů.
- */
-const DEFAULT_MEASURES_PER_SYSTEM = 10;
-
-/** Šířka vnitřní plochy A4 stránky z app.css. */
-const SYSTEM_WIDTH = 686;
-const STAFF_ROW_LEFT = 27;
-const STAFF_ROW_WIDTH = SYSTEM_WIDTH - STAFF_ROW_LEFT;
-
-const STAFF_CONTENT_LEFT = 46;
-const MEASURE_AREA_WIDTH = STAFF_ROW_WIDTH - STAFF_CONTENT_LEFT;
-const NOTE_LEFT_PADDING = 11;
-
-/**
- * Přibližná použitelná výška A4 pod titulkem. Podle ní skládáme systémy na
- * skutečné stránky; systém s textem má větší výšku než systém bez textu.
- */
-const PAGE_SYSTEMS_HEIGHT = 900;
-const SYSTEM_GAP = 24;
-const NORMAL_STAFF_HEIGHT = 56;
-const LYRIC_LINE_HEIGHT = 20;
-const STAFF_GAP = 16;
-const STAFF_LINE_TOP = 8.7;
-const STAFF_LINE_GAP = 7.95;
-const STAFF_STEP = STAFF_LINE_GAP / 2;
-const TREBLE_C4_Y = STAFF_LINE_TOP + STAFF_LINE_GAP * 5;
-const BASS_C3_Y = STAFF_LINE_TOP + STAFF_LINE_GAP * 2.5;
-
-type StemDirection = 'up' | 'down';
-
-interface PositionedNote {
-  event: NoteEvent;
-  voiceId: VoiceId;
-  left: number;
-  top: number;
-  direction: StemDirection;
-  accidental?: '♯' | '♭';
-}
-
 interface BeamAttachment {
   stemTop: number;
   stemHeight: number;
@@ -79,7 +51,7 @@ interface BeamSegment {
   top: number;
   width: number;
   level: 1 | 2;
-  direction: StemDirection;
+  direction: 'up' | 'down';
 }
 
 interface BeamLayout {
@@ -87,21 +59,9 @@ interface BeamLayout {
   segments: BeamSegment[];
 }
 
-interface SystemPlan {
-  measures: number[];
-  measureWidths: number[];
-  rowHeights: number[];
-  height: number;
-}
-
 /**
- * Renderer je stále jednoduchý a čitelný, ale už nepočítá s pevnými čtyřmi
- * takty na systém. Systémy skládá podle obsahu:
- *
- * - prázdné takty: typicky 10 za řádek;
- * - hustší rytmus: jednotlivé takty dostanou více místa;
- * - text: šířka taktů se zvětší tak, aby se slabiky zbytečně nepřekrývaly;
- * - při překročení šířky A4 systém přejde na nový řádek.
+ * ScoreRenderer už nepočítá horizontální sazbu not po kouskách.
+ * Tu dělá scoreLayoutEngine.ts. Renderer pouze vykresluje hotový plán.
  */
 export function ScoreRenderer({
   project,
@@ -113,24 +73,12 @@ export function ScoreRenderer({
   onSelectEvent,
   onCursorChange,
 }: Props) {
-  const rowVoiceGroups = getRowVoiceGroups(
-    project.layoutMode,
-    viewMode,
-    activeVoice,
-  );
-
-  const renderMeasureCount = getRenderedMeasureCount(project);
-  const systemPlans = buildSystemPlans(
-    project,
-    renderMeasureCount,
-    rowVoiceGroups,
-  );
-  const pages = paginateSystemPlans(systemPlans);
+  const layout = buildScoreLayout(project, activeVoice, viewMode);
 
   return (
     <div className="score-pages">
-      {pages.map((pagePlans, pageIndex) => (
-        <article className="paper-page" key={pageIndex}>
+      {layout.pages.map((page) => (
+        <article className="paper-page" key={page.index}>
           <header className="page-header">
             <h1>{project.title}</h1>
             <p className="page-meta">
@@ -143,25 +91,23 @@ export function ScoreRenderer({
           </header>
 
           <div className="score-systems">
-            {pagePlans.map((plan) => (
+            {page.systems.map((system) => (
               <ScoreSystem
-                key={plan.measures[0]}
+                key={system.id}
                 project={project}
                 viewMode={viewMode}
                 activeVoice={activeVoice}
                 cursor={cursor}
                 selectedEventId={selectedEventId}
                 playingEventId={playingEventId}
-                rowVoiceGroups={rowVoiceGroups}
-                plan={plan}
-                isFinalSystem={plan.measures.at(-1) === renderMeasureCount - 1}
+                system={system}
                 onSelectEvent={onSelectEvent}
                 onCursorChange={onCursorChange}
               />
             ))}
           </div>
 
-          <footer className="page-number">Strana {pageIndex + 1}</footer>
+          <footer className="page-number">Strana {page.index + 1}</footer>
         </article>
       ))}
     </div>
@@ -175,25 +121,16 @@ function ScoreSystem({
   cursor,
   selectedEventId,
   playingEventId,
-  rowVoiceGroups,
-  plan,
-  isFinalSystem,
+  system,
   onSelectEvent,
   onCursorChange,
 }: Props & {
-  rowVoiceGroups: VoiceId[][];
-  plan: SystemPlan;
-  isFinalSystem: boolean;
+  system: SystemLayoutPlan;
 }) {
-  const startMeasure = plan.measures[0];
-  const endMeasureExclusive = plan.measures.at(-1)! + 1;
-  const startTick = startMeasure * TICKS_PER_MEASURE;
-  const endTick = endMeasureExclusive * TICKS_PER_MEASURE;
-  const showBracket = rowVoiceGroups.length > 1;
-
+  const showBracket = system.rows.length > 1;
   const systemStyle = {
-    '--system-height': `${plan.height}px`,
-    '--bracket-height': `${Math.max(42, plan.height - 22)}px`,
+    '--system-height': `${system.height}px`,
+    '--bracket-height': `${Math.max(42, system.height - 22)}px`,
   } as CSSProperties;
 
   return (
@@ -208,89 +145,64 @@ function ScoreSystem({
       {showBracket && <div className="system-bracket" />}
       {showBracket && <div className="system-connector" />}
 
-      {rowVoiceGroups.map((voiceIds, rowIndex) => {
-        const isActiveStaff = voiceIds.includes(activeVoice);
-        const staffVoice = voiceIds[0];
-        const isTenorStaff = staffVoice === 't';
-        const isBassStaff = clefForVoice(staffVoice) === 'bass' && !isTenorStaff;
+      {system.rows.map((row) => {
+        const isActiveStaff = row.voiceIds.includes(activeVoice);
         const cursorIsInThisSystem = isActiveStaff
-          && cursor.tick >= startTick
-          && cursor.tick < endTick;
-
-        const notes = getPositionedNotes(
-          project.events,
-          voiceIds,
-          startTick,
-          endTick,
-          plan.measureWidths,
-        );
-        const beamLayout = createBeamLayout(notes);
-        const lyricLines = getLyricLines(notes, voiceIds);
-        const hasLyrics = lyricLines.length > 0;
+          && cursor.tick >= system.startTick
+          && cursor.tick < system.endTick;
+        const beamLayout = createBeamLayout(row.notes);
         const staffStyle = {
-          '--staff-row-height': `${plan.rowHeights[rowIndex]}px`,
+          '--staff-row-height': `${row.height}px`,
         } as CSSProperties;
 
         return (
           <div
-            className={`staff-row ${hasLyrics ? 'has-lyrics' : ''}`}
-            key={voiceIds.join('-')}
+            className={`staff-row ${row.lyrics.length > 0 ? 'has-lyrics' : ''}`}
+            key={row.id}
             style={staffStyle}
           >
             <FiveLineStaff />
 
-            <div className={`clef ${isBassStaff ? 'bass-clef' : ''}`}>
-              {isBassStaff ? '𝄢' : '𝄞'}
-              {isTenorStaff && <span className="tenor-octave">8</span>}
+            <div className={`clef ${row.isBassStaff ? 'bass-clef' : ''}`}>
+              {row.isBassStaff ? '𝄢' : '𝄞'}
+              {row.isTenorStaff && <span className="tenor-octave">8</span>}
             </div>
 
             {viewMode === 'part' && (
-              <span className="part-voice-label">{voiceName(staffVoice)}</span>
+              <span className="part-voice-label">{voiceName(row.staffVoice)}</span>
             )}
 
-            {plan.measures.map((measure, localIndex) => (
+            {system.measures.map((measure) => (
               <MeasureTarget
-                key={measure}
+                key={measure.measure}
                 measure={measure}
-                localIndex={localIndex}
-                measureWidth={plan.measureWidths[localIndex]}
-                measureWidths={plan.measureWidths}
                 isActiveStaff={isActiveStaff}
-                isSystemEnd={localIndex === plan.measures.length - 1}
-                isFinalSystem={isFinalSystem}
+                isSystemEnd={measure.localIndex === system.measures.length - 1}
+                isFinalSystem={system.isFinalSystem}
                 onCursorChange={onCursorChange}
               />
             ))}
 
             <BeamLayer segments={beamLayout.segments} />
 
-            {notes.map((note) => (
+            {row.notes.map((note) => (
               <NoteGlyph
                 key={note.event.id}
-                event={note.event}
-                voiceId={note.voiceId}
-                left={note.left}
-                top={note.top}
+                note={note}
                 beam={beamLayout.attachments.get(note.event.id)}
                 selected={note.event.id === selectedEventId}
                 playing={note.event.id === playingEventId}
                 activeVoice={note.voiceId === activeVoice}
-                accidental={note.accidental}
                 onClick={() => onSelectEvent(note.event)}
               />
             ))}
 
-            <LyricLayer lines={lyricLines} />
+            <LyricLayer lines={row.lyrics} />
 
             {cursorIsInThisSystem && (
               <div
                 className="score-cursor"
-                style={{
-                  left: getTickLeft(
-                    cursor.tick - startTick,
-                    plan.measureWidths,
-                  ),
-                }}
+                style={{ left: leftForCursorTick(cursor.tick, system) }}
                 aria-label={`Kurzor: takt ${tickToMeasure(cursor.tick) + 1}, doba ${Math.floor(tickInMeasure(cursor.tick) / TICKS_PER_BEAT) + 1}`}
               />
             )}
@@ -301,307 +213,141 @@ function ScoreSystem({
   );
 }
 
-function getRenderedMeasureCount(project: ScoreProject): number {
-  const lastUsedMeasure = project.events.reduce(
-    (last, event) => Math.max(last, tickToMeasure(event.startTick)),
-    -1,
-  );
-
-  const meaningfulCount = Math.max(
-    project.measureCount,
-    lastUsedMeasure + 1,
-    DEFAULT_MEASURES_PER_SYSTEM,
-  );
-
-  return Math.ceil(meaningfulCount / DEFAULT_MEASURES_PER_SYSTEM)
-    * DEFAULT_MEASURES_PER_SYSTEM;
-}
-
-function buildSystemPlans(
-  project: ScoreProject,
-  renderMeasureCount: number,
-  rowVoiceGroups: VoiceId[][],
-): SystemPlan[] {
-  const plans: SystemPlan[] = [];
-  let currentMeasures: number[] = [];
-  let currentMinimumWidths: number[] = [];
-  let currentWidth = 0;
-
-  const pushCurrent = () => {
-    if (currentMeasures.length === 0) {
+function MeasureTarget({
+  measure,
+  isActiveStaff,
+  isSystemEnd,
+  isFinalSystem,
+  onCursorChange,
+}: {
+  measure: MeasureLayoutPlan;
+  isActiveStaff: boolean;
+  isSystemEnd: boolean;
+  isFinalSystem: boolean;
+  onCursorChange: (position: CursorPosition) => void;
+}) {
+  function handleClick(event: MouseEvent<HTMLDivElement>) {
+    if (!isActiveStaff) {
       return;
     }
 
-    const measureWidths = justifyMeasureWidths(currentMinimumWidths);
-    const rowHeights = getRowHeights(
-      project,
-      rowVoiceGroups,
-      currentMeasures[0],
-      currentMeasures.at(-1)! + 1,
-    );
-
-    plans.push({
-      measures: currentMeasures,
-      measureWidths,
-      rowHeights,
-      height: getSystemHeight(rowHeights),
-    });
-
-    currentMeasures = [];
-    currentMinimumWidths = [];
-    currentWidth = 0;
-  };
-
-  for (let measure = 0; measure < renderMeasureCount; measure += 1) {
-    const minimumWidth = getMeasureMinimumWidth(
-      project,
-      measure,
-      rowVoiceGroups,
-    );
-    const exceedsMeasureLimit = currentMeasures.length >= DEFAULT_MEASURES_PER_SYSTEM;
-    const exceedsPageWidth = currentMeasures.length > 0
-      && currentWidth + minimumWidth > MEASURE_AREA_WIDTH;
-
-    if (exceedsMeasureLimit || exceedsPageWidth) {
-      pushCurrent();
-    }
-
-    currentMeasures.push(measure);
-    currentMinimumWidths.push(minimumWidth);
-    currentWidth += minimumWidth;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const localX = event.clientX - rect.left;
+    onCursorChange(cursorFromMeasureClick(measure, localX));
   }
 
-  pushCurrent();
-  return plans;
-}
-
-/**
- * Základní aproximace profesionální sazby:
- *
- * - 10 prázdných taktů vyplní řádek rovnoměrně;
- * - hustší rytmus si vezme více místa;
- * - mezi slabikami textu hlídáme minimální odstup.
- *
- * Přesná typografická sazba jako v MuseScore je složitý optimalizační problém,
- * ale tento plán je dobře rozšiřitelný a už dává praktické rozestupy pro práci.
- */
-function getMeasureMinimumWidth(
-  project: ScoreProject,
-  measure: number,
-  _rowVoiceGroups: VoiceId[][],
-): number {
-  const measureStart = measure * TICKS_PER_MEASURE;
-  const measureEnd = measureStart + TICKS_PER_MEASURE;
-  const events = project.events
-    .filter((event) => event.startTick >= measureStart && event.startTick < measureEnd)
-    .sort((left, right) => left.startTick - right.startTick);
-
-  // Prázdný systém má deset rovnoměrných taktů. U hustého rytmu se šířka
-  // určuje z počtu skutečných časových pozic, ne plošným roztahováním kvůli
-  // textu. Text pak dorovnává jen sousední noty v getPositionedNotes().
-  let required = MEASURE_AREA_WIDTH / DEFAULT_MEASURES_PER_SYSTEM;
-  const ticks = [...new Set(events.map((event) => event.startTick))];
-  const shortest = events.reduce(
-    (minimum, event) => Math.min(minimum, event.durationTicks),
-    Number.POSITIVE_INFINITY,
+  return (
+    <div
+      className={[
+        'measure',
+        isActiveStaff ? 'cursor-target' : '',
+        isSystemEnd ? 'system-end-measure' : '',
+        isSystemEnd && isFinalSystem ? 'final-system-measure' : '',
+      ].filter(Boolean).join(' ')}
+      style={{
+        left: measure.left,
+        width: measure.width,
+      }}
+      onClick={isActiveStaff ? handleClick : undefined}
+      title={isActiveStaff ? 'Kliknutím nastavíš místo dalšího zápisu.' : undefined}
+    >
+      <span className="measure-number">{measure.measure + 1}</span>
+      {isSystemEnd && <span className="system-end-bar" aria-hidden="true" />}
+    </div>
   );
-
-  if (ticks.length >= 2) {
-    const minimumGap = shortest <= 1 ? 14 : shortest <= 2 ? 18 : 24;
-    required = Math.max(required, NOTE_LEFT_PADDING * 2 + (ticks.length - 1) * minimumGap);
-  }
-
-  if (shortest <= 1) {
-    required = Math.max(required, 132);
-  } else if (shortest <= 2) {
-    required = Math.max(required, 104);
-  } else if (events.length >= 4) {
-    required = Math.max(required, 82);
-  }
-
-  return Math.min(280, Math.ceil(required));
 }
 
-
-
-function estimateLyricWidth(text: string): number {
-  return Array.from(text).reduce((width, character) => {
-    if (character === ' ') {
-      return width + 4;
-    }
-
-    if ('.,:;!|'.includes(character)) {
-      return width + 4;
-    }
-
-    if ('ilIíĺ'.includes(character)) {
-      return width + 4.5;
-    }
-
-    if ('mwMW'.includes(character)) {
-      return width + 10;
-    }
-
-    return width + 7.4;
-  }, 2);
+function FiveLineStaff() {
+  return (
+    <div className="staff-lines" aria-hidden="true">
+      {Array.from({ length: 5 }, (_, index) => (
+        <span
+          key={index}
+          style={{ top: STAFF_LINE_TOP + index * STAFF_LINE_GAP }}
+        />
+      ))}
+    </div>
+  );
 }
 
-function justifyMeasureWidths(minimumWidths: number[]): number[] {
-  const minimumTotal = minimumWidths.reduce((sum, width) => sum + width, 0);
-  const freeSpace = Math.max(0, MEASURE_AREA_WIDTH - minimumTotal);
-  const extraPerMeasure = freeSpace / minimumWidths.length;
+function NoteGlyph({
+  note,
+  beam,
+  selected,
+  playing,
+  activeVoice,
+  onClick,
+}: {
+  note: PositionedNote;
+  beam: BeamAttachment | undefined;
+  selected: boolean;
+  playing: boolean;
+  activeVoice: boolean;
+  onClick: () => void;
+}) {
+  const down = note.direction === 'down';
+  const openHead = note.event.durationTicks >= 8;
+  const stemless = note.event.durationTicks >= 16;
+  const flagCount = !beam && !stemless && note.event.durationTicks < 4
+    ? (note.event.durationTicks <= 1 ? 2 : 1)
+    : 0;
 
-  return minimumWidths.map((width) => width + extraPerMeasure);
+  const style = beam
+    ? ({
+      left: note.left,
+      top: note.top,
+      '--beam-stem-top': `${beam.stemTop}px`,
+      '--beam-stem-height': `${beam.stemHeight}px`,
+    } as CSSProperties)
+    : { left: note.left, top: note.top };
+
+  return (
+    <button
+      type="button"
+      className={[
+        'note-glyph',
+        down ? 'stem-down' : 'stem-up',
+        selected ? 'selected' : '',
+        playing ? 'playing' : '',
+        activeVoice ? 'active-voice-note' : '',
+        openHead ? 'open-head' : '',
+        stemless ? 'stemless' : '',
+        beam ? 'beamed' : '',
+      ].filter(Boolean).join(' ')}
+      style={style}
+      onClick={(clickEvent) => {
+        clickEvent.stopPropagation();
+        onClick();
+      }}
+      title={`MIDI ${note.event.midi}`}
+    >
+      {note.ledgerLines.map((lineTop) => (
+        <span
+          className="ledger-line"
+          key={lineTop}
+          style={{ top: lineTop - note.top + 9 }}
+        />
+      ))}
+      {note.accidental && <span className="note-accidental">{note.accidental}</span>}
+      <span className="note-head" />
+      {!stemless && <span className="note-stem" />}
+      {Array.from({ length: flagCount }, (_, index) => (
+        <span className={`note-flag flag-${index + 1}`} key={index} />
+      ))}
+    </button>
+  );
 }
 
-function getRowHeights(
-  project: ScoreProject,
-  rowVoiceGroups: VoiceId[][],
-  startMeasure: number,
-  endMeasureExclusive: number,
-): number[] {
-  const startTick = startMeasure * TICKS_PER_MEASURE;
-  const endTick = endMeasureExclusive * TICKS_PER_MEASURE;
-
-  return rowVoiceGroups.map((voiceIds) => {
-    const lyricVoiceCount = voiceIds.filter((voiceId) => project.events.some((event) => (
-      event.voiceId === voiceId
-      && event.startTick >= startTick
-      && event.startTick < endTick
-      && Boolean(event.lyric?.trim())
-    ))).length;
-
-    return NORMAL_STAFF_HEIGHT + lyricVoiceCount * LYRIC_LINE_HEIGHT;
-  });
-}
-
-
-function getSystemHeight(rowHeights: number[]): number {
-  return rowHeights.reduce((sum, height) => sum + height, 0)
-    + Math.max(0, rowHeights.length - 1) * STAFF_GAP;
-}
-
-function paginateSystemPlans(plans: SystemPlan[]): SystemPlan[][] {
-  const pages: SystemPlan[][] = [];
-  let currentPage: SystemPlan[] = [];
-  let usedHeight = 0;
-
-  for (const plan of plans) {
-    const requiredHeight = plan.height
-      + (currentPage.length > 0 ? SYSTEM_GAP : 0);
-
-    if (currentPage.length > 0 && usedHeight + requiredHeight > PAGE_SYSTEMS_HEIGHT) {
-      pages.push(currentPage);
-      currentPage = [];
-      usedHeight = 0;
-    }
-
-    currentPage.push(plan);
-    usedHeight += plan.height
-      + (currentPage.length > 1 ? SYSTEM_GAP : 0);
-  }
-
-  if (currentPage.length > 0) {
-    pages.push(currentPage);
-  }
-
-  return pages;
-}
-
-function getPositionedNotes(
-  events: NoteEvent[],
-  voiceIds: VoiceId[],
-  startTick: number,
-  endTick: number,
-  measureWidths: number[],
-): PositionedNote[] {
-  return voiceIds.flatMap((voiceId) => {
-    const voiceEvents = events
-      .filter((event) => (
-        event.voiceId === voiceId
-        && event.startTick >= startTick
-        && event.startTick < endTick
-      ))
-      .sort((left, right) => left.startTick - right.startTick);
-
-    let previous: PositionedNote | null = null;
-
-    return voiceEvents.map((event) => {
-      const baseLeft = getTickLeft(event.startTick - startTick, measureWidths);
-      const accidental = accidentalForMidi(event.midi);
-      const positioned: PositionedNote = {
-        event,
-        voiceId,
-        left: baseLeft,
-        top: pitchToTop(event.midi, voiceId),
-        direction: stemDirectionForVoice(voiceId),
-        accidental,
-      };
-
-      if (previous && tickToMeasure(previous.event.startTick) === tickToMeasure(event.startTick)) {
-        const rhythmGap = minimumRhythmGap(previous.event, event);
-        const lyricGap = requiredLyricGap(previous.event, event);
-        positioned.left = Math.max(
-          baseLeft,
-          previous.left + Math.max(rhythmGap, lyricGap),
-        );
-      }
-
-      previous = positioned;
-      return positioned;
-    });
-  });
-}
-
-
-interface LyricLine {
-  event: NoteEvent;
-  left: number;
-  top: number;
-  hyphenLeft?: number;
-}
-
-function getLyricLines(notes: PositionedNote[], voiceIds: VoiceId[]): LyricLine[] {
-  const lines: LyricLine[] = [];
-
-  for (const voiceId of voiceIds) {
-    const voiceNotes = notes
-      .filter((note) => note.voiceId === voiceId && note.event.lyric?.trim())
-      .sort((left, right) => left.event.startTick - right.event.startTick);
-    const lane = voiceIds.indexOf(voiceId);
-    const top = 55 + lane * LYRIC_LINE_HEIGHT;
-
-    for (let index = 0; index < voiceNotes.length; index += 1) {
-      const current = voiceNotes[index];
-      const next = voiceNotes[index + 1];
-      const hasHyphen = current.event.lyricConnector === 'hyphen' && next;
-
-      lines.push({
-        event: current.event,
-        left: current.left,
-        top,
-        hyphenLeft: hasHyphen
-          ? current.left
-            + estimateLyricWidth(current.event.lyric ?? '') / 2
-            + Math.max(5, (next.left - current.left - estimateLyricWidth(current.event.lyric ?? '') / 2 - estimateLyricWidth(next.event.lyric ?? '') / 2) / 2)
-          : undefined,
-      });
-    }
-  }
-
-  return lines;
-}
-
-function LyricLayer({ lines }: { lines: LyricLine[] }) {
+function LyricLayer({ lines }: { lines: LyricLineLayout[] }) {
   return (
     <div className="lyric-layer" aria-label="Text písně">
       {lines.map((line) => (
         <span
           className="lyric-syllable"
-          key={line.event.id}
+          key={line.id}
           style={{ left: line.left, top: line.top }}
         >
-          {line.event.lyric}
+          {line.text}
           {line.hyphenLeft !== undefined && (
             <span className="lyric-hyphen" style={{ left: line.hyphenLeft - line.left }}>‐</span>
           )}
@@ -609,46 +355,6 @@ function LyricLayer({ lines }: { lines: LyricLine[] }) {
       ))}
     </div>
   );
-}
-
-function minimumRhythmGap(previous: NoteEvent, current: NoteEvent): number {
-  const shortest = Math.min(previous.durationTicks, current.durationTicks);
-  if (shortest <= 1) {
-    return 14;
-  }
-  if (shortest <= 2) {
-    return 18;
-  }
-  return 22;
-}
-
-function requiredLyricGap(previous: NoteEvent, current: NoteEvent): number {
-  if (!previous.lyric?.trim() || !current.lyric?.trim()) {
-    return 0;
-  }
-
-  const connectorGap = previous.lyricConnector === 'hyphen' ? 11 : 8;
-  return (estimateLyricWidth(previous.lyric) + estimateLyricWidth(current.lyric)) / 2 + connectorGap;
-}
-
-function accidentalForMidi(midi: number): '♯' | '♭' | undefined {
-  // Data zatím neobsahují tóninu ani enharmonické pojmenování. Tento výchozí
-  // zápis používá v češtině přirozenou směs: cis/fis/gis a es/b.
-  const pitchClass = ((midi % 12) + 12) % 12;
-  return ({
-    1: '♯',
-    3: '♭',
-    6: '♯',
-    8: '♯',
-    10: '♭',
-  } as Partial<Record<number, '♯' | '♭'>>)[pitchClass];
-}
-
-function diatonicStepForMidi(midi: number): number {
-  const pitchClass = ((midi % 12) + 12) % 12;
-  const octave = Math.floor(midi / 12) - 1;
-  const letterStep = [0, 0, 1, 2, 2, 3, 3, 4, 4, 5, 6, 6][pitchClass];
-  return octave * 7 + letterStep;
 }
 
 function createBeamLayout(notes: PositionedNote[]): BeamLayout {
@@ -849,204 +555,6 @@ function BeamLayer({ segments }: { segments: BeamSegment[] }) {
       ))}
     </div>
   );
-}
-
-function getRowVoiceGroups(
-  layoutMode: ScoreProject['layoutMode'],
-  viewMode: ScoreViewMode,
-  activeVoice: VoiceId,
-): VoiceId[][] {
-  if (viewMode === 'part') {
-    return [[activeVoice]];
-  }
-
-  return layoutMode === 'two-staves'
-    ? [['s', 'a'], ['t', 'b']]
-    : [['s'], ['a'], ['t'], ['b']];
-}
-
-function MeasureTarget({
-  measure,
-  localIndex,
-  measureWidth,
-  measureWidths,
-  isActiveStaff,
-  isSystemEnd,
-  isFinalSystem,
-  onCursorChange,
-}: {
-  measure: number;
-  localIndex: number;
-  measureWidth: number;
-  measureWidths: number[];
-  isActiveStaff: boolean;
-  isSystemEnd: boolean;
-  isFinalSystem: boolean;
-  onCursorChange: (position: CursorPosition) => void;
-}) {
-  function handleClick(event: MouseEvent<HTMLDivElement>) {
-    if (!isActiveStaff) {
-      return;
-    }
-
-    const rect = event.currentTarget.getBoundingClientRect();
-    const padding = Math.min(NOTE_LEFT_PADDING, rect.width * 0.18);
-    const horizontalOffset = event.clientX - rect.left;
-    const normalized = Math.max(
-      0,
-      Math.min(1, (horizontalOffset - padding) / Math.max(1, rect.width - padding * 2)),
-    );
-
-    const tickOffset = Math.max(
-      0,
-      Math.min(
-        TICKS_PER_MEASURE - 1,
-        Math.round(normalized * TICKS_PER_MEASURE),
-      ),
-    );
-
-    onCursorChange({ tick: measure * TICKS_PER_MEASURE + tickOffset });
-  }
-
-  return (
-    <div
-      className={[
-        'measure',
-        isActiveStaff ? 'cursor-target' : '',
-        isSystemEnd ? 'system-end-measure' : '',
-        isSystemEnd && isFinalSystem ? 'final-system-measure' : '',
-      ].filter(Boolean).join(' ')}
-      style={{
-        left: getMeasureLeft(localIndex, measureWidths),
-        width: measureWidth,
-      }}
-      onClick={isActiveStaff ? handleClick : undefined}
-      title={isActiveStaff ? 'Kliknutím nastavíš místo dalšího zápisu.' : undefined}
-    >
-      <span className="measure-number">{measure + 1}</span>
-      {isSystemEnd && <span className="system-end-bar" aria-hidden="true" />}
-    </div>
-  );
-}
-
-
-function FiveLineStaff() {
-  return (
-    <div className="staff-lines" aria-hidden="true">
-      {Array.from({ length: 5 }, (_, index) => <span key={index} />)}
-    </div>
-  );
-}
-
-function NoteGlyph({
-  event,
-  voiceId,
-  left,
-  top,
-  beam,
-  selected,
-  playing,
-  activeVoice,
-  accidental,
-  onClick,
-}: {
-  event: NoteEvent;
-  voiceId: VoiceId;
-  left: number;
-  top: number;
-  beam: BeamAttachment | undefined;
-  selected: boolean;
-  playing: boolean;
-  activeVoice: boolean;
-  accidental: '♯' | '♭' | undefined;
-  onClick: () => void;
-}) {
-  const down = voiceId === 'a' || voiceId === 'b';
-  const openHead = event.durationTicks >= 8;
-  const stemless = event.durationTicks >= 16;
-  const flagCount = !beam && !stemless && event.durationTicks < 4
-    ? (event.durationTicks <= 1 ? 2 : 1)
-    : 0;
-
-  const style = beam
-    ? ({
-      left,
-      top,
-      '--beam-stem-top': `${beam.stemTop}px`,
-      '--beam-stem-height': `${beam.stemHeight}px`,
-    } as CSSProperties)
-    : { left, top };
-
-  return (
-    <button
-      type="button"
-      className={[
-        'note-glyph',
-        down ? 'stem-down' : 'stem-up',
-        selected ? 'selected' : '',
-        playing ? 'playing' : '',
-        activeVoice ? 'active-voice-note' : '',
-        openHead ? 'open-head' : '',
-        stemless ? 'stemless' : '',
-        beam ? 'beamed' : '',
-      ].filter(Boolean).join(' ')}
-      style={style}
-      onClick={(clickEvent) => {
-        clickEvent.stopPropagation();
-        onClick();
-      }}
-      title={`MIDI ${event.midi}`}
-    >
-      {accidental && <span className="note-accidental">{accidental}</span>}
-      <span className="note-head" />
-      {!stemless && <span className="note-stem" />}
-      {Array.from({ length: flagCount }, (_, index) => (
-        <span className={`note-flag flag-${index + 1}`} key={index} />
-      ))}
-    </button>
-  );
-}
-
-
-function getMeasureLeft(localMeasureIndex: number, measureWidths: number[]): number {
-  return STAFF_CONTENT_LEFT
-    + measureWidths
-      .slice(0, localMeasureIndex)
-      .reduce((sum, width) => sum + width, 0);
-}
-
-function getTickLeft(relativeTick: number, measureWidths: number[]): number {
-  const localMeasureIndex = Math.floor(relativeTick / TICKS_PER_MEASURE);
-  const tickOffset = relativeTick % TICKS_PER_MEASURE;
-  const measureWidth = measureWidths[localMeasureIndex]
-    ?? MEASURE_AREA_WIDTH / DEFAULT_MEASURES_PER_SYSTEM;
-  const padding = Math.min(NOTE_LEFT_PADDING, measureWidth * 0.18);
-  const writableWidth = Math.max(8, measureWidth - padding * 2);
-
-  return getMeasureLeft(localMeasureIndex, measureWidths)
-    + padding
-    + (tickOffset / TICKS_PER_MEASURE) * writableWidth;
-}
-
-function pitchToTop(midi: number, voiceId: VoiceId): number {
-  const isBass = voiceId === 'b';
-  const referenceMidi = isBass ? 48 : 60; // C3 pro basovou, C4 pro houslovou osnovu
-  const referenceY = isBass ? BASS_C3_Y : TREBLE_C4_Y;
-  const staffSteps = diatonicStepForMidi(midi) - diatonicStepForMidi(referenceMidi);
-  return referenceY - staffSteps * STAFF_STEP;
-}
-
-
-function stemDirectionForVoice(voiceId: VoiceId): StemDirection {
-  return voiceId === 'a' || voiceId === 'b' ? 'down' : 'up';
-}
-
-function clefForVoice(voiceId: VoiceId): 'treble' | 'bass' {
-  return VOICES.find((voice) => voice.id === voiceId)?.clef ?? 'treble';
-}
-
-function voiceName(voiceId: VoiceId): string {
-  return VOICES.find((voice) => voice.id === voiceId)?.name ?? voiceId;
 }
 
 function groupBy<T, K>(items: T[], keyForItem: (item: T) => K): Map<K, T[]> {

@@ -68,10 +68,21 @@ interface LiveRecordingSession {
   startedMetronome: boolean;
 }
 
+interface ProjectHistory {
+  past: ScoreProject[];
+  future: ScoreProject[];
+}
+
+const MAX_HISTORY_LENGTH = 80;
+
 export function App() {
   const [project, setProject] = useState<ScoreProject>(
     () => loadProject() ?? createEmptyProject(),
   );
+  const [projectHistory, setProjectHistory] = useState<ProjectHistory>({
+    past: [],
+    future: [],
+  });
   const [inputSettings, setInputSettings] = useState<InputSettings>(
     () => loadInputSettings(),
   );
@@ -99,6 +110,7 @@ export function App() {
   // Refs dovolují klávesovým událostem pracovat se zcela aktuálním stavem
   // i při rychlém hraní několika not za sebou mezi dvěma React rendery.
   const projectRef = useRef(project);
+  const projectHistoryRef = useRef<ProjectHistory>({ past: [], future: [] });
   const activeVoiceRef = useRef(activeVoice);
   const durationRef = useRef(duration);
   const inputModeRef = useRef<InputMode>(inputSettings.inputMode);
@@ -110,6 +122,7 @@ export function App() {
   const heldLiveInputsRef = useRef(new Map<string, HeldLiveInput>());
 
   useEffect(() => { projectRef.current = project; }, [project]);
+  useEffect(() => { projectHistoryRef.current = projectHistory; }, [projectHistory]);
   useEffect(() => { activeVoiceRef.current = activeVoice; }, [activeVoice]);
   useEffect(() => { durationRef.current = duration; }, [duration]);
   useEffect(() => { inputModeRef.current = inputSettings.inputMode; }, [inputSettings.inputMode]);
@@ -185,6 +198,24 @@ export function App() {
       }
 
       if (event.ctrlKey || event.metaKey) {
+        const key = event.key.toLowerCase();
+
+        if (key === 'z') {
+          event.preventDefault();
+          if (event.shiftKey) {
+            redoProject();
+          } else {
+            undoProject();
+          }
+          return;
+        }
+
+        if (key === 'y') {
+          event.preventDefault();
+          redoProject();
+          return;
+        }
+
         return;
       }
 
@@ -246,16 +277,93 @@ export function App() {
     };
   });
 
-  function updateProject(mutator: (current: ScoreProject) => ScoreProject) {
-    setProject((current) => {
-      const next = {
-        ...mutator(current),
-        updatedAt: new Date().toISOString(),
-      };
+  function updateProject(
+    mutator: (current: ScoreProject) => ScoreProject,
+    options: { recordHistory?: boolean } = {},
+  ) {
+    const recordHistory = options.recordHistory ?? true;
+    const current = projectRef.current;
+    const mutated = mutator(current);
 
-      projectRef.current = next;
-      return next;
-    });
+    if (mutated === current) {
+      return;
+    }
+
+    const next = {
+      ...mutated,
+      updatedAt: new Date().toISOString(),
+    };
+
+    if (recordHistory) {
+      setProjectHistory((history) => ({
+        past: [...history.past, current].slice(-MAX_HISTORY_LENGTH),
+        future: [],
+      }));
+    }
+
+    projectRef.current = next;
+    setProject(next);
+  }
+
+  function restoreProjectFromHistory(
+    nextProject: ScoreProject,
+    nextHistory: ProjectHistory,
+    statusText: string,
+  ) {
+    playbackRef.current.stop();
+    stopLiveRecording();
+
+    projectRef.current = nextProject;
+    setProject(nextProject);
+    setProjectHistory(nextHistory);
+    setSelectedEventId(null);
+    setPlayingEventId(null);
+    setStatus(statusText);
+
+    const nextCursor = getCursorAfterLastVoiceEvent(
+      nextProject.events,
+      activeVoiceRef.current,
+    );
+    cursorRef.current = nextCursor;
+    setCursor(nextCursor);
+  }
+
+  function undoProject() {
+    const history = projectHistoryRef.current;
+    const previous = history.past.at(-1);
+
+    if (!previous) {
+      setStatus('Není co vrátit zpět');
+      return;
+    }
+
+    restoreProjectFromHistory(
+      previous,
+      {
+        past: history.past.slice(0, -1),
+        future: [projectRef.current, ...history.future].slice(0, MAX_HISTORY_LENGTH),
+      },
+      'Zpět',
+    );
+  }
+
+  function redoProject() {
+    const history = projectHistoryRef.current;
+    const next = history.future[0];
+
+    if (!next) {
+      setStatus('Není co zopakovat');
+      return;
+    }
+
+    restoreProjectFromHistory(
+      next,
+      {
+        past: [...history.past, projectRef.current].slice(-MAX_HISTORY_LENGTH),
+        future: history.future.slice(1),
+      },
+      'Znovu',
+    );
   }
 
   function requiredMeasureCountForTick(tick: number): number {
@@ -273,7 +381,7 @@ export function App() {
       current.measureCount >= requiredMeasureCount
         ? current
         : { ...current, measureCount: requiredMeasureCount }
-    ));
+    ), { recordHistory: false });
   }
 
   function setCursorPosition(position: CursorPosition, ensureVisible = true) {
@@ -637,6 +745,7 @@ export function App() {
     const empty = createEmptyProject();
     projectRef.current = empty;
     setProject(empty);
+    setProjectHistory({ past: [], future: [] });
     activeVoiceRef.current = 's';
     setActiveVoice('s');
     setCursorPosition({ tick: 0 }, false);
@@ -652,6 +761,7 @@ export function App() {
 
         projectRef.current = loaded;
         setProject(loaded);
+        setProjectHistory({ past: [], future: [] });
         const position = getCursorAfterLastVoiceEvent(loaded.events, activeVoiceRef.current);
         setCursorPosition(position);
         setSelectedEventId(null);
@@ -698,6 +808,22 @@ export function App() {
         </button>
         <button type="button" onClick={() => fileInputRef.current?.click()}>
           Otevřít
+        </button>
+        <button
+          type="button"
+          onClick={undoProject}
+          disabled={projectHistory.past.length === 0}
+          title="Zpět Ctrl+Z"
+        >
+          ↶ Zpět
+        </button>
+        <button
+          type="button"
+          onClick={redoProject}
+          disabled={projectHistory.future.length === 0}
+          title="Znovu Ctrl+Y / Ctrl+Shift+Z"
+        >
+          ↷ Znovu
         </button>
 
         <input
