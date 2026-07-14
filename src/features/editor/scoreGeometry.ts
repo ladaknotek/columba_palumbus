@@ -32,7 +32,6 @@ export const STAFF_TOP = STAFF_LINE_TOP;
 export const STAFF_BOTTOM = STAFF_LINE_TOP + STAFF_LINE_GAP * 4;
 
 export const NOTE_TOP = 8.7;
-
 export const TREBLE_C4_Y = NOTE_TOP + STAFF_LINE_GAP * 5;
 export const BASS_C3_Y = NOTE_TOP + STAFF_LINE_GAP * 2.5;
 

@@ -21,6 +21,7 @@ import {
   type InputMode,
   type NoteEvent,
   type RecordQuantization,
+  type RestEvent,
   type ScoreProject,
   type ScoreViewMode,
   type SoundStyle,
@@ -219,6 +220,16 @@ export function App() {
         return;
       }
 
+      if (event.key === ' ' || event.key === 'Spacebar') {
+        event.preventDefault();
+
+        if (!event.repeat && entryModeRef.current === 'step') {
+          insertStepRest();
+        }
+
+        return;
+      }
+
       const midi = midiForKeyboardKey(
         event.key,
         inputModeRef.current,
@@ -323,6 +334,7 @@ export function App() {
     const nextCursor = getCursorAfterLastVoiceEvent(
       nextProject.events,
       activeVoiceRef.current,
+      nextProject.rests ?? [],
     );
     cursorRef.current = nextCursor;
     setCursor(nextCursor);
@@ -395,7 +407,11 @@ export function App() {
   }
 
   function moveCursorToVoiceEnd(voiceId: VoiceId) {
-    const position = getCursorAfterLastVoiceEvent(projectRef.current.events, voiceId);
+    const position = getCursorAfterLastVoiceEvent(
+      projectRef.current.events,
+      voiceId,
+      projectRef.current.rests ?? [],
+    );
     setCursorPosition(position);
   }
 
@@ -411,14 +427,17 @@ export function App() {
     const voiceId = activeVoiceRef.current;
     const insertionPosition = cursorRef.current;
     const noteDuration = durationRef.current;
+    const durationTicks = durationToTicks(noteDuration);
     const event: NoteEvent = {
       id: crypto.randomUUID(),
       voiceId,
       startTick: insertionPosition.tick,
-      durationTicks: durationToTicks(noteDuration),
+      durationTicks,
       midi,
     };
     const nextCursor = advanceCursor(insertionPosition, noteDuration);
+    const rangeStart = insertionPosition.tick;
+    const rangeEnd = rangeStart + durationTicks;
 
     updateProject((current) => ({
       ...current,
@@ -429,10 +448,21 @@ export function App() {
       events: [
         ...current.events.filter((existing) => !(
           existing.voiceId === voiceId
-          && existing.startTick === insertionPosition.tick
+          && rangesOverlap(
+            existing.startTick,
+            existing.startTick + existing.durationTicks,
+            rangeStart,
+            rangeEnd,
+          )
         )),
         event,
       ],
+      rests: splitRestsAroundRange(
+        current.rests ?? [],
+        voiceId,
+        rangeStart,
+        rangeEnd,
+      ),
     }));
 
     setSelectedEventId(event.id);
@@ -445,21 +475,95 @@ export function App() {
     setCursorPosition(nextCursor, false);
   }
 
-  function deleteSelectedOrLast() {
-    const target = selectedEventId
-      ? projectRef.current.events.find((event) => event.id === selectedEventId)
-      : [...projectRef.current.events]
-        .filter((event) => event.voiceId === activeVoiceRef.current)
-        .sort((left, right) => right.startTick - left.startTick)
-        .at(0);
-
-    if (!target) {
-      return;
-    }
+  function insertStepRest() {
+    const voiceId = activeVoiceRef.current;
+    const insertionPosition = cursorRef.current;
+    const restDuration = durationRef.current;
+    const durationTicks = durationToTicks(restDuration);
+    const rangeStart = insertionPosition.tick;
+    const rangeEnd = rangeStart + durationTicks;
+    const rest: RestEvent = {
+      id: crypto.randomUUID(),
+      voiceId,
+      startTick: rangeStart,
+      durationTicks,
+    };
+    const nextCursor = advanceCursor(insertionPosition, restDuration);
 
     updateProject((current) => ({
       ...current,
-      events: current.events.filter((event) => event.id !== target.id),
+      measureCount: Math.max(
+        current.measureCount,
+        requiredMeasureCountForTick(nextCursor.tick),
+      ),
+      events: current.events.filter((existing) => !(
+        existing.voiceId === voiceId
+        && rangesOverlap(
+          existing.startTick,
+          existing.startTick + existing.durationTicks,
+          rangeStart,
+          rangeEnd,
+        )
+      )),
+      rests: [
+        ...splitRestsAroundRange(
+          current.rests ?? [],
+          voiceId,
+          rangeStart,
+          rangeEnd,
+        ),
+        rest,
+      ].sort((left, right) => left.startTick - right.startTick),
+    }));
+
+    setSelectedEventId(null);
+    setCursorPosition(nextCursor, false);
+    setStatus('Pomlka vložena');
+  }
+
+  function deleteSelectedOrLast() {
+    if (selectedEventId) {
+      const target = projectRef.current.events.find((event) => event.id === selectedEventId);
+
+      if (!target) {
+        return;
+      }
+
+      updateProject((current) => ({
+        ...current,
+        events: current.events.filter((event) => event.id !== target.id),
+      }));
+
+      setCursorPosition({ tick: target.startTick }, false);
+      setSelectedEventId(null);
+      return;
+    }
+
+    const voiceId = activeVoiceRef.current;
+    const lastNote = [...projectRef.current.events]
+      .filter((event) => event.voiceId === voiceId)
+      .sort((left, right) => right.startTick - left.startTick)
+      .at(0);
+    const lastRest = [...(projectRef.current.rests ?? [])]
+      .filter((rest) => rest.voiceId === voiceId)
+      .sort((left, right) => right.startTick - left.startTick)
+      .at(0);
+
+    if (!lastNote && !lastRest) {
+      return;
+    }
+
+    const deleteRest = lastRest && (!lastNote || lastRest.startTick >= lastNote.startTick);
+    const target = deleteRest ? lastRest! : lastNote!;
+
+    updateProject((current) => ({
+      ...current,
+      events: deleteRest
+        ? current.events
+        : current.events.filter((event) => event.id !== target.id),
+      rests: deleteRest
+        ? (current.rests ?? []).filter((rest) => rest.id !== target.id)
+        : (current.rests ?? []),
     }));
 
     setCursorPosition({ tick: target.startTick }, false);
@@ -599,10 +703,21 @@ export function App() {
       events: [
         ...current.events.filter((existing) => !(
           existing.voiceId === held.voiceId
-          && existing.startTick === startTick
+          && rangesOverlap(
+            existing.startTick,
+            existing.startTick + existing.durationTicks,
+            startTick,
+            endTick,
+          )
         )),
         event,
       ],
+      rests: splitRestsAroundRange(
+        current.rests ?? [],
+        held.voiceId,
+        startTick,
+        endTick,
+      ),
     }));
 
     setSelectedEventId(event.id);
@@ -762,7 +877,11 @@ export function App() {
         projectRef.current = loaded;
         setProject(loaded);
         setProjectHistory({ past: [], future: [] });
-        const position = getCursorAfterLastVoiceEvent(loaded.events, activeVoiceRef.current);
+        const position = getCursorAfterLastVoiceEvent(
+          loaded.events,
+          activeVoiceRef.current,
+          loaded.rests ?? [],
+        );
         setCursorPosition(position);
         setSelectedEventId(null);
         setPlayingEventId(null);
@@ -989,6 +1108,62 @@ export function App() {
       </div>
     </div>
   );
+}
+
+function rangesOverlap(
+  firstStart: number,
+  firstEnd: number,
+  secondStart: number,
+  secondEnd: number,
+): boolean {
+  return firstStart < secondEnd && secondStart < firstEnd;
+}
+
+function splitRestsAroundRange(
+  rests: RestEvent[],
+  voiceId: VoiceId,
+  rangeStart: number,
+  rangeEnd: number,
+): RestEvent[] {
+  const result: RestEvent[] = [];
+
+  for (const rest of rests) {
+    if (
+      rest.voiceId !== voiceId
+      || !rangesOverlap(
+        rest.startTick,
+        rest.startTick + rest.durationTicks,
+        rangeStart,
+        rangeEnd,
+      )
+    ) {
+      result.push(rest);
+      continue;
+    }
+
+    if (rest.startTick < rangeStart) {
+      result.push({
+        ...rest,
+        id: crypto.randomUUID(),
+        durationTicks: rangeStart - rest.startTick,
+      });
+    }
+
+    const restEnd = rest.startTick + rest.durationTicks;
+
+    if (restEnd > rangeEnd) {
+      result.push({
+        ...rest,
+        id: crypto.randomUUID(),
+        startTick: rangeEnd,
+        durationTicks: restEnd - rangeEnd,
+      });
+    }
+  }
+
+  return result
+    .filter((rest) => rest.durationTicks > 0)
+    .sort((left, right) => left.startTick - right.startTick);
 }
 
 function snapTicks(value: number, grid: number): number {

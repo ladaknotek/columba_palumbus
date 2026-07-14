@@ -48,6 +48,15 @@ export interface NoteEvent {
   lyrics?: LyricSyllable[];
 }
 
+export interface RestEvent {
+  id: string;
+  voiceId: VoiceId;
+  /** Absolutní začátek pomlky v ticích. */
+  startTick: number;
+  /** Délka pomlky v ticích. */
+  durationTicks: number;
+}
+
 export interface ScoreProject {
   version: 2;
   id: string;
@@ -57,6 +66,8 @@ export interface ScoreProject {
   playbackSound: SoundStyle;
   measureCount: number;
   events: NoteEvent[];
+  /** Explicitně zapsané pomlky. Implicitní pomlky dopočítává layout engine. */
+  rests: RestEvent[];
   updatedAt: string;
 }
 
@@ -81,6 +92,7 @@ export function createEmptyProject(): ScoreProject {
     playbackSound: 'piano',
     measureCount: 4,
     events: [],
+    rests: [],
     updatedAt: new Date().toISOString(),
   };
 }
@@ -134,8 +146,9 @@ export function tickToBeatNumber(tick: number): number {
 export function getCursorAfterLastVoiceEvent(
   events: NoteEvent[],
   voiceId: VoiceId,
+  rests: RestEvent[] = [],
 ): CursorPosition {
-  const lastTick = events
+  const lastNoteTick = events
     .filter((event) => event.voiceId === voiceId)
     .reduce(
       (maximum, event) => Math.max(
@@ -145,7 +158,17 @@ export function getCursorAfterLastVoiceEvent(
       0,
     );
 
-  return { tick: lastTick };
+  const lastRestTick = rests
+    .filter((rest) => rest.voiceId === voiceId)
+    .reduce(
+      (maximum, rest) => Math.max(
+        maximum,
+        rest.startTick + rest.durationTicks,
+      ),
+      0,
+    );
+
+  return { tick: Math.max(lastNoteTick, lastRestTick) };
 }
 
 export function measureCountRequiredForTick(tick: number): number {

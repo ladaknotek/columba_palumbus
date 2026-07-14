@@ -1,12 +1,13 @@
 import {
+  TICKS_PER_BEAT,
   durationToTicks,
   type Duration,
   type LayoutMode,
   type NoteEvent,
+  type RestEvent,
   type ScoreProject,
   type SoundStyle,
   type VoiceId,
-  TICKS_PER_BEAT,
 } from '../../domain/score';
 
 const STORAGE_KEY = 'columba-palumbus/current-project/v2';
@@ -71,6 +72,18 @@ function isV2Event(value: unknown): value is NoteEvent {
     && isFiniteNumber(candidate.midi);
 }
 
+function isV2Rest(value: unknown): value is RestEvent {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  const candidate = value as Partial<RestEvent>;
+  return typeof candidate.id === 'string'
+    && isVoiceId(candidate.voiceId)
+    && isFiniteNumber(candidate.startTick)
+    && isFiniteNumber(candidate.durationTicks);
+}
+
 function normalizeV2(value: unknown): ScoreProject | null {
   if (!value || typeof value !== 'object') {
     return null;
@@ -88,6 +101,13 @@ function normalizeV2(value: unknown): ScoreProject | null {
     durationTicks: Math.max(1, Math.round(event.durationTicks)),
     midi: Math.max(0, Math.min(127, Math.round(event.midi))),
   }));
+  const rests = Array.isArray(candidate.rests)
+    ? candidate.rests.filter(isV2Rest).map((rest) => ({
+      ...rest,
+      startTick: Math.max(0, Math.round(rest.startTick)),
+      durationTicks: Math.max(1, Math.round(rest.durationTicks)),
+    }))
+    : [];
 
   return {
     version: 2,
@@ -96,16 +116,13 @@ function normalizeV2(value: unknown): ScoreProject | null {
     tempo: isFiniteNumber(candidate.tempo)
       ? Math.max(30, Math.min(300, Math.round(candidate.tempo)))
       : 96,
-    layoutMode: isLayoutMode(candidate.layoutMode)
-      ? candidate.layoutMode
-      : 'two-staves',
-    playbackSound: isSoundStyle(candidate.playbackSound)
-      ? candidate.playbackSound
-      : 'piano',
+    layoutMode: isLayoutMode(candidate.layoutMode) ? candidate.layoutMode : 'two-staves',
+    playbackSound: isSoundStyle(candidate.playbackSound) ? candidate.playbackSound : 'piano',
     measureCount: isFiniteNumber(candidate.measureCount)
       ? Math.max(4, Math.round(candidate.measureCount))
       : 4,
     events,
+    rests,
     updatedAt: typeof candidate.updatedAt === 'string'
       ? candidate.updatedAt
       : new Date().toISOString(),
@@ -163,16 +180,13 @@ function migrateLegacyProject(value: unknown): ScoreProject | null {
     tempo: isFiniteNumber(candidate.tempo)
       ? Math.max(30, Math.min(300, Math.round(candidate.tempo)))
       : 96,
-    layoutMode: isLayoutMode(candidate.layoutMode)
-      ? candidate.layoutMode
-      : 'two-staves',
-    playbackSound: isSoundStyle(candidate.playbackSound)
-      ? candidate.playbackSound
-      : 'piano',
+    layoutMode: isLayoutMode(candidate.layoutMode) ? candidate.layoutMode : 'two-staves',
+    playbackSound: isSoundStyle(candidate.playbackSound) ? candidate.playbackSound : 'piano',
     measureCount: isFiniteNumber(candidate.measureCount)
       ? Math.max(4, Math.round(candidate.measureCount))
       : 4,
     events,
+    rests: [],
     updatedAt: typeof candidate.updatedAt === 'string'
       ? candidate.updatedAt
       : new Date().toISOString(),
@@ -207,14 +221,12 @@ export function downloadProject(project: ScoreProject): void {
     [JSON.stringify(project, null, 2)],
     { type: 'application/json' },
   );
-
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
 
   link.href = url;
   link.download = `${project.title.trim() || 'quartet-project'}.quartet.json`;
   link.click();
-
   URL.revokeObjectURL(url);
 }
 

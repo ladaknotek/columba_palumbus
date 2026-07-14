@@ -151,3 +151,39 @@
   transform: translateX(-50%);
   font: inherit;
 }
+
+.rest-glyph {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  display: block;
+  min-width: 18px;
+  text-align: center;
+  font-family: 'Bravura', 'Noto Music', 'Segoe UI Symbol', serif;
+  font-size: 23px;
+  line-height: 1;
+  color: #171717;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.rest-whole,
+.rest-half {
+  font-size: 22px;
+}
+
+.rest-quarter {
+  font-size: 25px;
+}
+
+.rest-eighth,
+.rest-sixteenth {
+  font-size: 24px;
+}
+
+.implicit-rest {
+  opacity: 0.92;
+}
+
+.explicit-rest {
+  opacity: 1;
+}

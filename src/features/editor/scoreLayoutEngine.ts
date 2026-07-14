@@ -1,12 +1,12 @@
 import type {
   CursorPosition,
   NoteEvent,
+  RestEvent,
   ScoreProject,
   ScoreViewMode,
   VoiceId,
 } from '../../domain/score';
 import {
-  TICKS_PER_BEAT,
   TICKS_PER_MEASURE,
   tickToMeasure,
 } from '../../domain/score';
@@ -21,6 +21,8 @@ import {
   STAFF_BOTTOM_PADDING,
   STAFF_CONTENT_LEFT,
   STAFF_GAP,
+  STAFF_LINE_GAP,
+  STAFF_LINE_TOP,
   SYSTEM_GAP,
   accidentalForMidi,
   clefForVoice,
@@ -36,6 +38,7 @@ import {
   estimateLyricWidth,
   getEventLyricSyllables,
   getNoteVisualExtents,
+  getRestVisualExtents,
   type LyricSyllableLayout,
 } from './noteMetrics';
 
@@ -86,6 +89,7 @@ export interface StaffRowLayoutPlan {
   lyricTop: number | null;
   lyricLanes: LyricLaneLayout[];
   notes: PositionedNote[];
+  rests: PositionedRest[];
   lyrics: LyricLineLayout[];
 }
 
@@ -103,6 +107,24 @@ export interface PositionedNote {
   direction: StemDirection;
   accidental?: '♯' | '♭';
   ledgerLines: number[];
+  leftExtent: number;
+  rightExtent: number;
+}
+
+export type RestKind = 'whole' | 'half' | 'quarter' | 'eighth' | 'sixteenth';
+
+export interface PositionedRest {
+  id: string;
+  voiceId: VoiceId;
+  startTick: number;
+  durationTicks: number;
+  left: number;
+  top: number;
+  kind: RestKind;
+  fullMeasure: boolean;
+  explicit: boolean;
+  leftExtent: number;
+  rightExtent: number;
 }
 
 export interface LyricLineLayout {
@@ -133,6 +155,10 @@ interface SystemDraft {
   measures: MeasureDraft[];
   minimumWidth: number;
 }
+
+type RestSegment = Omit<PositionedRest, 'left' | 'top' | 'leftExtent' | 'rightExtent'>;
+
+const REST_NOTE_GAP = 0;
 
 export function buildScoreLayout(
   project: ScoreProject,
@@ -201,10 +227,15 @@ export function cursorFromMeasureClick(
 }
 
 function getRenderedMeasureCount(project: ScoreProject): number {
-  const lastUsedMeasure = project.events.reduce(
+  const lastUsedNoteMeasure = project.events.reduce(
     (last, event) => Math.max(last, tickToMeasure(event.startTick)),
     -1,
   );
+  const lastUsedRestMeasure = (project.rests ?? []).reduce(
+    (last, rest) => Math.max(last, tickToMeasure(rest.startTick)),
+    -1,
+  );
+  const lastUsedMeasure = Math.max(lastUsedNoteMeasure, lastUsedRestMeasure);
 
   const meaningfulCount = Math.max(
     project.measureCount,
@@ -265,14 +296,44 @@ function buildMeasureDraft(
   const measureStart = measure * TICKS_PER_MEASURE;
   const measureEnd = measureStart + TICKS_PER_MEASURE;
   const visibleVoiceIds = new Set(rowVoiceGroups.flat());
-  const events = project.events
+  const noteItems = project.events
     .filter((event) => (
       visibleVoiceIds.has(event.voiceId)
       && event.startTick >= measureStart
       && event.startTick < measureEnd
-    ));
+    ))
+    .map((event) => ({
+      startTick: event.startTick,
+      extents: getNoteVisualExtents(event),
+    }));
+  const restItems = [...visibleVoiceIds]
+    .flatMap((voiceId) => buildRestSegmentsForVoiceInMeasure(
+      project.events,
+      project.rests ?? [],
+      voiceId,
+      measureStart,
+      measureEnd,
+    ))
+    .filter((rest) => !rest.fullMeasure)
+    .flatMap((rest) => {
+      const extents = getRestVisualExtents(rest.kind);
+      const endTick = rest.startTick + rest.durationTicks;
 
-  if (events.length === 0) {
+      return [
+        {
+          startTick: rest.startTick,
+          extents,
+        },
+        {
+          startTick: endTick,
+          extents: { left: 4, right: 4 },
+        },
+      ];
+    });
+  const rhythmicItems = [...noteItems, ...restItems]
+    .filter((item) => item.startTick >= measureStart && item.startTick <= measureEnd);
+
+  if (rhythmicItems.length === 0) {
     return {
       measure,
       minimumWidth: MEASURE_AREA_WIDTH / DEFAULT_MEASURES_PER_SYSTEM,
@@ -280,21 +341,18 @@ function buildMeasureDraft(
     };
   }
 
-  const grouped = groupBy(events, (event) => event.startTick - measureStart);
+  const grouped = groupBy(rhythmicItems, (item) => item.startTick - measureStart);
   const tickOffsets = [...grouped.keys()].sort((left, right) => left - right);
   const columns: IntrinsicColumn[] = [];
   let previous: IntrinsicColumn | null = null;
 
   for (const tickOffset of tickOffsets) {
-    const eventsAtTick = grouped.get(tickOffset) ?? [];
-    const extents = eventsAtTick.reduce(
-      (maximum, event) => {
-        const eventExtents = getNoteVisualExtents(event);
-        return {
-          left: Math.max(maximum.left, eventExtents.left),
-          right: Math.max(maximum.right, eventExtents.right),
-        };
-      },
+    const itemsAtTick = grouped.get(tickOffset) ?? [];
+    const extents = itemsAtTick.reduce(
+      (maximum, item) => ({
+        left: Math.max(maximum.left, item.extents.left),
+        right: Math.max(maximum.right, item.extents.right),
+      }),
       { left: 8, right: 12 },
     );
 
@@ -332,7 +390,7 @@ function buildMeasureDraft(
 
   return {
     measure,
-    minimumWidth: Math.min(360, Math.ceil(minimumWidth)),
+    minimumWidth: Math.min(MEASURE_AREA_WIDTH, Math.ceil(minimumWidth)),
     columns,
   };
 }
@@ -341,14 +399,14 @@ function gapBetweenTicks(previousTick: number, currentTick: number): number {
   const tickDistance = Math.max(1, currentTick - previousTick);
 
   if (tickDistance <= 1) {
-    return MIN_COLUMN_GAP + 3;
+    return MIN_COLUMN_GAP + 0;
   }
 
   if (tickDistance <= 2) {
-    return MIN_COLUMN_GAP + 5;
+    return MIN_COLUMN_GAP + 0;
   }
 
-  return MIN_COLUMN_GAP + 8;
+  return MIN_COLUMN_GAP + 0;
 }
 
 function buildSystemPlan(
@@ -440,6 +498,16 @@ function buildStaffRowPlan(
     endTick,
     measures,
   ));
+  const rests = voiceIds.flatMap((voiceId) => getPositionedRestsForVoice(
+    project.events,
+    project.rests ?? [],
+    voiceId,
+    voiceIds,
+    startTick,
+    endTick,
+    measures,
+    notes.filter((note) => note.voiceId === voiceId),
+  ));
 
   const lyricLanes = getLyricLanes(notes, voiceIds);
   const contentBottom = notes.reduce(
@@ -481,6 +549,7 @@ function buildStaffRowPlan(
     lyricTop,
     lyricLanes: lanesWithTop,
     notes,
+    rests,
     lyrics,
   };
 }
@@ -501,6 +570,7 @@ function getPositionedNotesForVoice(
     .sort((left, right) => left.startTick - right.startTick)
     .map((event) => {
       const top = pitchToTop(event.midi, voiceId);
+      const extents = getNoteVisualExtents(event);
 
       return {
         event,
@@ -510,6 +580,8 @@ function getPositionedNotesForVoice(
         direction: stemDirectionForVoice(voiceId),
         accidental: accidentalForMidi(event.midi),
         ledgerLines: ledgerLineTopsForNote(top),
+        leftExtent: extents.left,
+        rightExtent: extents.right,
       };
     });
 }
@@ -520,6 +592,355 @@ function leftForEvent(
   measures: MeasureLayoutPlan[],
 ): number {
   const relativeTick = event.startTick - systemStartTick;
+  const localMeasureIndex = Math.floor(relativeTick / TICKS_PER_MEASURE);
+  const tickOffset = relativeTick % TICKS_PER_MEASURE;
+  const measure = measures[localMeasureIndex];
+
+  if (!measure) {
+    return STAFF_CONTENT_LEFT;
+  }
+
+  return measure.left + leftWithinMeasure(measure, tickOffset);
+}
+
+function buildRestSegmentsForVoiceInMeasure(
+  events: NoteEvent[],
+  rests: RestEvent[],
+  voiceId: VoiceId,
+  measureStart: number,
+  measureEnd: number,
+): RestSegment[] {
+  const explicitRests = rests
+    .filter((rest) => (
+      rest.voiceId === voiceId
+      && rest.startTick < measureEnd
+      && rest.startTick + rest.durationTicks > measureStart
+    ));
+  const occupiedRanges = mergeRanges([
+    ...events
+      .filter((event) => (
+        event.voiceId === voiceId
+        && event.startTick < measureEnd
+        && event.startTick + event.durationTicks > measureStart
+      ))
+      .map((event) => ({
+        start: Math.max(measureStart, event.startTick),
+        end: Math.min(measureEnd, event.startTick + event.durationTicks),
+      })),
+    ...explicitRests.map((rest) => ({
+      start: Math.max(measureStart, rest.startTick),
+      end: Math.min(measureEnd, rest.startTick + rest.durationTicks),
+    })),
+  ]);
+
+  if (occupiedRanges.length === 0) {
+    return [{
+      id: `implicit-rest:${voiceId}:${measureStart}:full`,
+      voiceId,
+      startTick: measureStart,
+      durationTicks: TICKS_PER_MEASURE,
+      kind: 'whole',
+      fullMeasure: true,
+      explicit: false,
+    }];
+  }
+
+  const result: RestSegment[] = [];
+
+  for (const rest of explicitRests) {
+    const restStart = Math.max(measureStart, rest.startTick);
+    const restEnd = Math.min(measureEnd, rest.startTick + rest.durationTicks);
+
+    result.push(...splitRestRange(
+      restStart,
+      restEnd,
+      true,
+      `${rest.id}:${Math.floor(measureStart / TICKS_PER_MEASURE)}`,
+      voiceId,
+    ));
+  }
+
+  let cursor = measureStart;
+
+  for (const range of occupiedRanges) {
+    if (range.start > cursor) {
+      result.push(...splitRestRange(
+        cursor,
+        range.start,
+        false,
+        `implicit-rest:${voiceId}:${cursor}`,
+        voiceId,
+      ));
+    }
+
+    cursor = Math.max(cursor, range.end);
+  }
+
+  if (cursor < measureEnd) {
+    result.push(...splitRestRange(
+      cursor,
+      measureEnd,
+      false,
+      `implicit-rest:${voiceId}:${cursor}`,
+      voiceId,
+    ));
+  }
+
+  return result.sort((left, right) => left.startTick - right.startTick);
+}
+
+function getPositionedRestsForVoice(
+  events: NoteEvent[],
+  rests: RestEvent[],
+  voiceId: VoiceId,
+  rowVoiceIds: VoiceId[],
+  startTick: number,
+  endTick: number,
+  measures: MeasureLayoutPlan[],
+  positionedNotes: PositionedNote[],
+): PositionedRest[] {
+  const result: PositionedRest[] = [];
+
+  for (const measure of measures) {
+    const measureStart = measure.measure * TICKS_PER_MEASURE;
+    const measureEnd = measureStart + TICKS_PER_MEASURE;
+
+    if (measureEnd <= startTick || measureStart >= endTick) {
+      continue;
+    }
+
+    const segments = buildRestSegmentsForVoiceInMeasure(
+      events,
+      rests,
+      voiceId,
+      measureStart,
+      measureEnd,
+    );
+
+    const notesInMeasure = positionedNotes.filter((note) => (
+      note.event.startTick < measureEnd
+      && note.event.startTick + note.event.durationTicks > measureStart
+    ));
+
+    for (const segment of segments) {
+      result.push(positionRest(
+        segment,
+        measure,
+        startTick,
+        measures,
+        rowVoiceIds,
+        notesInMeasure,
+      ));
+    }
+  }
+
+  return result.sort((left, right) => left.startTick - right.startTick);
+}
+
+function positionRest(
+  rest: RestSegment,
+  measure: MeasureLayoutPlan,
+  systemStartTick: number,
+  measures: MeasureLayoutPlan[],
+  rowVoiceIds: VoiceId[],
+  positionedNotes: PositionedNote[],
+): PositionedRest {
+  const extents = getRestVisualExtents(rest.kind);
+  const naturalLeft = rest.fullMeasure
+    ? measure.left + measure.width / 2
+    : getRestNaturalLeft(rest, measure, systemStartTick, measures);
+
+  const previousNote = positionedNotes
+    .filter((note) => note.event.startTick + note.event.durationTicks <= rest.startTick)
+    .sort((left, right) => (
+      (right.event.startTick + right.event.durationTicks)
+      - (left.event.startTick + left.event.durationTicks)
+    ))
+    .at(0);
+  const nextNote = positionedNotes
+    .filter((note) => note.event.startTick >= rest.startTick + rest.durationTicks)
+    .sort((left, right) => left.event.startTick - right.event.startTick)
+    .at(0);
+
+  const slot = restSlotBounds(rest, measure, systemStartTick, measures);
+  const minLeftFromSlot = slot.left + extents.left;
+  const maxLeftFromSlot = slot.right - extents.right;
+  const minLeftFromPreviousNote = previousNote
+    ? previousNote.left + previousNote.rightExtent + REST_NOTE_GAP + extents.left
+    : Number.NEGATIVE_INFINITY;
+  const maxLeftFromNextNote = nextNote
+    ? nextNote.left - nextNote.leftExtent - REST_NOTE_GAP - extents.right
+    : Number.POSITIVE_INFINITY;
+
+  const minLeft = Math.max(minLeftFromSlot, minLeftFromPreviousNote);
+  const maxLeft = Math.min(maxLeftFromSlot, maxLeftFromNextNote);
+  const left = minLeft <= maxLeft
+    ? clamp(naturalLeft, minLeft, maxLeft)
+    : clamp(naturalLeft, minLeftFromSlot, maxLeftFromSlot);
+
+  return {
+    ...rest,
+    left,
+    top: restTopForVoice(rest.voiceId, rest.kind, rest.fullMeasure, rowVoiceIds),
+    leftExtent: extents.left,
+    rightExtent: extents.right,
+  };
+}
+
+function getRestNaturalLeft(
+  rest: RestSegment,
+  measure: MeasureLayoutPlan,
+  systemStartTick: number,
+  measures: MeasureLayoutPlan[],
+): number {
+  const slot = restSlotBounds(rest, measure, systemStartTick, measures);
+  return slot.left + (slot.right - slot.left) / 2;
+}
+
+function restSlotBounds(
+  rest: RestSegment,
+  measure: MeasureLayoutPlan,
+  systemStartTick: number,
+  measures: MeasureLayoutPlan[],
+): { left: number; right: number } {
+  if (rest.fullMeasure) {
+    return {
+      left: measure.left,
+      right: measure.left + measure.width,
+    };
+  }
+
+  const measureEndTick = (measure.measure + 1) * TICKS_PER_MEASURE;
+  const restEndTick = rest.startTick + rest.durationTicks;
+
+  return {
+    left: leftForAbsoluteTick(rest.startTick, systemStartTick, measures),
+    right: restEndTick >= measureEndTick
+      ? measure.left + measure.width
+      : leftForAbsoluteTick(restEndTick, systemStartTick, measures),
+  };
+}
+
+function splitRestRange(
+  startTick: number,
+  endTick: number,
+  explicit: boolean,
+  idPrefix: string,
+  voiceId: VoiceId,
+): RestSegment[] {
+  const result: RestSegment[] = [];
+  let cursor = Math.max(0, Math.round(startTick));
+  let remaining = Math.max(0, Math.round(endTick - startTick));
+
+  if (remaining <= 0) {
+    return result;
+  }
+
+  const startsAtMeasure = cursor % TICKS_PER_MEASURE === 0;
+
+  if (remaining === TICKS_PER_MEASURE && startsAtMeasure) {
+    return [{
+      id: `${idPrefix}:whole:${cursor}`,
+      voiceId,
+      startTick: cursor,
+      durationTicks: TICKS_PER_MEASURE,
+      kind: 'whole',
+      fullMeasure: true,
+      explicit,
+    }];
+  }
+
+  while (remaining > 0) {
+    const localTick = cursor % TICKS_PER_MEASURE;
+    const [durationTicks, kind] = bestRestDurationForPosition(localTick, remaining);
+
+    result.push({
+      id: `${idPrefix}:${kind}:${cursor}`,
+      voiceId,
+      startTick: cursor,
+      durationTicks,
+      kind,
+      fullMeasure: false,
+      explicit,
+    });
+
+    cursor += durationTicks;
+    remaining -= durationTicks;
+  }
+
+  return result;
+}
+
+function bestRestDurationForPosition(
+  localTick: number,
+  remaining: number,
+): [number, RestKind] {
+  // V 4/4 nedáváme půlovou pomlku přes slabou půlku taktu.
+  // Například mezera 2.–4. doba se rozdělí na čtvrťovou + půlovou,
+  // podobně jako v běžné sazbě a v MuseScore.
+  if ((localTick === 0 || localTick === 8) && remaining >= 8) {
+    return [8, 'half'];
+  }
+
+  if (localTick % 4 === 0 && remaining >= 4) {
+    return [4, 'quarter'];
+  }
+
+  if (localTick % 2 === 0 && remaining >= 2) {
+    return [2, 'eighth'];
+  }
+
+  return [1, 'sixteenth'];
+}
+
+function restTopForVoice(
+  voiceId: VoiceId,
+  kind: RestKind,
+  fullMeasure: boolean,
+  rowVoiceIds: VoiceId[],
+): number {
+  const restMiddleLine = STAFF_LINE_TOP + STAFF_LINE_GAP * 2;
+
+  // V samostatném hlasu a ve čtyřosnovém zobrazení nemá smysl posouvat
+  // pomlky podle názvu hlasu. Každá osnova obsahuje jen jeden hlas, takže
+  // pomlka má být ve všech hlasech na stejném, čitelně nižším místě.
+  const rowHasSingleVoice = rowVoiceIds.length === 1;
+  const voiceOffset = rowHasSingleVoice
+    ? STAFF_LINE_GAP
+    : (voiceId === 's' || voiceId === 't' ? -6 : 8) + STAFF_LINE_GAP;
+
+  const fullMeasureOffset = fullMeasure || kind === 'whole' ? -2 : 0;
+  return restMiddleLine + voiceOffset + fullMeasureOffset;
+}
+
+function mergeRanges(
+  ranges: Array<{ start: number; end: number }>,
+): Array<{ start: number; end: number }> {
+  const ordered = ranges
+    .filter((range) => range.end > range.start)
+    .sort((left, right) => left.start - right.start);
+  const merged: Array<{ start: number; end: number }> = [];
+
+  for (const range of ordered) {
+    const previous = merged.at(-1);
+
+    if (!previous || range.start > previous.end) {
+      merged.push({ ...range });
+      continue;
+    }
+
+    previous.end = Math.max(previous.end, range.end);
+  }
+
+  return merged;
+}
+
+function leftForAbsoluteTick(
+  tick: number,
+  systemStartTick: number,
+  measures: MeasureLayoutPlan[],
+): number {
+  const relativeTick = tick - systemStartTick;
   const localMeasureIndex = Math.floor(relativeTick / TICKS_PER_MEASURE);
   const tickOffset = relativeTick % TICKS_PER_MEASURE;
   const measure = measures[localMeasureIndex];
@@ -658,6 +1079,10 @@ function paginateSystemPlans(systems: SystemLayoutPlan[]): PageLayoutPlan[] {
   }
 
   return pages;
+}
+
+function clamp(value: number, minimum: number, maximum: number): number {
+  return Math.max(minimum, Math.min(maximum, value));
 }
 
 function groupBy<T, K>(items: T[], keyForItem: (item: T) => K): Map<K, T[]> {

@@ -88,3 +88,31 @@ export function getNoteVisualExtents(event: NoteEvent): NoteVisualExtents {
     lyricHalfWidth,
   };
 }
+
+
+export type RestVisualKind = 'whole' | 'half' | 'quarter' | 'eighth' | 'sixteenth';
+
+export interface RestVisualExtents {
+  left: number;
+  right: number;
+}
+
+/**
+ * Vizuální box pomlky pro horizontální sazbu.
+ * Pomlky mají vlastní prostor stejně jako noty, aby se nelepily na okolní noty.
+ */
+export function getRestVisualExtents(kind: RestVisualKind): RestVisualExtents {
+  switch (kind) {
+    case 'whole':
+    case 'half':
+      return { left: 0, right: 0 };
+    case 'quarter':
+      return { left: 0, right: 0 };
+    case 'eighth':
+      return { left: 0, right: 0 };
+    case 'sixteenth':
+      return { left: 0, right: 0 };
+    default:
+      return { left: 0, right: 9 };
+  }
+}

@@ -25,6 +25,8 @@ import {
   type LyricLineLayout,
   type MeasureLayoutPlan,
   type PositionedNote,
+  type PositionedRest,
+  type RestKind,
   type SystemLayoutPlan,
 } from './scoreLayoutEngine';
 import './noteBeaming.css';
@@ -185,6 +187,10 @@ function ScoreSystem({
 
             <BeamLayer segments={beamLayout.segments} />
 
+            {row.rests.map((rest) => (
+              <RestGlyph key={rest.id} rest={rest} />
+            ))}
+
             {row.notes.map((note) => (
               <NoteGlyph
                 key={note.event.id}
@@ -335,6 +341,32 @@ function NoteGlyph({
         <span className={`note-flag flag-${index + 1}`} key={index} />
       ))}
     </button>
+  );
+}
+
+const REST_SYMBOLS: Record<RestKind, string> = {
+  whole: '𝄻',
+  half: '𝄼',
+  quarter: '𝄽',
+  eighth: '𝄾',
+  sixteenth: '𝄿',
+};
+
+function RestGlyph({ rest }: { rest: PositionedRest }) {
+  return (
+    <span
+      className={[
+        'rest-glyph',
+        `rest-${rest.kind}`,
+        rest.fullMeasure ? 'full-measure-rest' : '',
+        rest.explicit ? 'explicit-rest' : 'implicit-rest',
+      ].filter(Boolean).join(' ')}
+      style={{ left: rest.left, top: rest.top }}
+      title={`${rest.kind} pomlka`}
+      aria-hidden="true"
+    >
+      {REST_SYMBOLS[rest.kind]}
+    </span>
   );
 }
 
