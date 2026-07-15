@@ -726,8 +726,6 @@ function getPositionedRestsForVoice(
       result.push(positionRest(
         segment,
         measure,
-        startTick,
-        measures,
         rowVoiceIds,
         notesInMeasure,
       ));
@@ -740,15 +738,11 @@ function getPositionedRestsForVoice(
 function positionRest(
   rest: RestSegment,
   measure: MeasureLayoutPlan,
-  systemStartTick: number,
-  measures: MeasureLayoutPlan[],
   rowVoiceIds: VoiceId[],
   positionedNotes: PositionedNote[],
 ): PositionedRest {
   const extents = getRestVisualExtents(rest.kind);
-  const naturalLeft = rest.fullMeasure
-    ? measure.left + measure.width / 2
-    : getRestNaturalLeft(rest, measure, systemStartTick, measures);
+  const naturalLeft = getRestNaturalLeft(rest, measure);
 
   const previousNote = positionedNotes
     .filter((note) => note.event.startTick + note.event.durationTicks <= rest.startTick)
@@ -762,7 +756,7 @@ function positionRest(
     .sort((left, right) => left.event.startTick - right.event.startTick)
     .at(0);
 
-  const slot = restSlotBounds(rest, measure, systemStartTick, measures);
+  const slot = restSlotBounds(rest, measure);
   const minLeftFromSlot = slot.left + extents.left;
   const maxLeftFromSlot = slot.right - extents.right;
   const minLeftFromPreviousNote = previousNote
@@ -790,35 +784,40 @@ function positionRest(
 function getRestNaturalLeft(
   rest: RestSegment,
   measure: MeasureLayoutPlan,
-  systemStartTick: number,
-  measures: MeasureLayoutPlan[],
 ): number {
-  const slot = restSlotBounds(rest, measure, systemStartTick, measures);
+  const slot = restSlotBounds(rest, measure);
   return slot.left + (slot.right - slot.left) / 2;
 }
 
 function restSlotBounds(
   rest: RestSegment,
   measure: MeasureLayoutPlan,
-  systemStartTick: number,
-  measures: MeasureLayoutPlan[],
 ): { left: number; right: number } {
-  if (rest.fullMeasure) {
-    return {
-      left: measure.left,
-      right: measure.left + measure.width,
-    };
-  }
-
-  const measureEndTick = (measure.measure + 1) * TICKS_PER_MEASURE;
-  const restEndTick = rest.startTick + rest.durationTicks;
+  const measureStartTick = measure.measure * TICKS_PER_MEASURE;
+  const startOffset = rest.fullMeasure
+    ? 0
+    : rest.startTick - measureStartTick;
+  const endOffset = rest.fullMeasure
+    ? TICKS_PER_MEASURE
+    : rest.startTick + rest.durationTicks - measureStartTick;
 
   return {
-    left: leftForAbsoluteTick(rest.startTick, systemStartTick, measures),
-    right: restEndTick >= measureEndTick
-      ? measure.left + measure.width
-      : leftForAbsoluteTick(restEndTick, systemStartTick, measures),
+    left: leftWithinRestRhythmicSlot(measure, startOffset),
+    right: leftWithinRestRhythmicSlot(measure, endOffset),
   };
+}
+
+function leftWithinRestRhythmicSlot(
+  measure: MeasureLayoutPlan,
+  tickOffset: number,
+): number {
+  const normalizedTick = clamp(tickOffset, 0, TICKS_PER_MEASURE);
+  const padding = Math.min(NOTE_LEFT_PADDING, measure.width * 0.18);
+  const writableWidth = Math.max(8, measure.width - padding * 2);
+
+  return measure.left
+    + padding
+    + (normalizedTick / TICKS_PER_MEASURE) * writableWidth;
 }
 
 function splitRestRange(
@@ -933,23 +932,6 @@ function mergeRanges(
   }
 
   return merged;
-}
-
-function leftForAbsoluteTick(
-  tick: number,
-  systemStartTick: number,
-  measures: MeasureLayoutPlan[],
-): number {
-  const relativeTick = tick - systemStartTick;
-  const localMeasureIndex = Math.floor(relativeTick / TICKS_PER_MEASURE);
-  const tickOffset = relativeTick % TICKS_PER_MEASURE;
-  const measure = measures[localMeasureIndex];
-
-  if (!measure) {
-    return STAFF_CONTENT_LEFT;
-  }
-
-  return measure.left + leftWithinMeasure(measure, tickOffset);
 }
 
 function leftWithinMeasure(
